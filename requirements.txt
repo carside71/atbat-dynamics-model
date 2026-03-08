@@ -1,0 +1,27 @@
+# Pythonパッケージ（Jupyter とデータ分析用）
+# 注意: Dockerfile 内では apt パッケージ（git, curl 等）をインストールしています。
+#       ここにはPythonライブラリのみを列挙してください。
+
+# Jupyter / Notebook
+notebook
+jupyterlab
+ipykernel
+
+# 基本的な数値計算 / データ分析
+numpy
+pandas
+scipy
+matplotlib
+seaborn
+
+# 機械学習 / 統計
+scikit-learn
+statsmodels
+
+# 可視化 / ユーティリティ
+plotly
+tqdm
+ipython
+
+# Excel入出力等
+openpyxl
