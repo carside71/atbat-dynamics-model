@@ -25,3 +25,6 @@ ipython
 
 # Excel入出力等
 openpyxl
+
+# 野球データ分析用ライブラリ
+pybaseball
