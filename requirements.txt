@@ -27,4 +27,5 @@ ipython
 openpyxl
 
 # 野球データ分析用ライブラリ
-pybaseball
+# Note: pybaseballの最新版を取得するためにはGitHubからインストールする必要がある。
+pybaseball @ git+https://github.com/jldbc/pybaseball.git@cd1a0d0
