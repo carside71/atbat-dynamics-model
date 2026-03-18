@@ -34,12 +34,14 @@ class AtBatDNN(nn.Module):
         backbone_layers = []
         in_dim = input_dim
         for hidden_dim in cfg.backbone_hidden:
-            backbone_layers.extend([
-                nn.Linear(in_dim, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(cfg.dropout),
-            ])
+            backbone_layers.extend(
+                [
+                    nn.Linear(in_dim, hidden_dim),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(cfg.dropout),
+                ]
+            )
             in_dim = hidden_dim
         self.backbone = nn.Sequential(*backbone_layers)
         backbone_out = cfg.backbone_hidden[-1]
@@ -60,16 +62,20 @@ class AtBatDNN(nn.Module):
         layers = []
         d = in_dim
         for h in hidden_dims:
-            layers.extend([
-                nn.Linear(d, h),
-                nn.ReLU(),
-                nn.Dropout(self.cfg.dropout),
-            ])
+            layers.extend(
+                [
+                    nn.Linear(d, h),
+                    nn.ReLU(),
+                    nn.Dropout(self.cfg.dropout),
+                ]
+            )
             d = h
         layers.append(nn.Linear(d, out_dim))
         return nn.Sequential(*layers)
 
-    def forward(self, cat_dict: dict[str, torch.Tensor], cont: torch.Tensor, ord_feat: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self, cat_dict: dict[str, torch.Tensor], cont: torch.Tensor, ord_feat: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
         # Embed categorical features
         embeds = []
         for feat_name in self.cfg.embedding_dims:

@@ -17,24 +17,46 @@ class DataConfig:
     test_years: list[int] = field(default_factory=lambda: [2025])
 
     # 入力特徴量
-    categorical_features: list[str] = field(default_factory=lambda: [
-        "p_throws", "pitch_type", "batter", "stand",
-        "base_out_state", "count_state",
-    ])
-    continuous_features: list[str] = field(default_factory=lambda: [
-        "release_speed", "release_spin_rate", "pfx_x", "pfx_z", "plate_x", "plate_z",
-    ])
-    ordinal_features: list[str] = field(default_factory=lambda: [
-        "inning_clipped", "is_inning_top", "diff_score_clipped", "pitch_number_clipped",
-    ])
+    categorical_features: list[str] = field(
+        default_factory=lambda: [
+            "p_throws",
+            "pitch_type",
+            "batter",
+            "stand",
+            "base_out_state",
+            "count_state",
+        ]
+    )
+    continuous_features: list[str] = field(
+        default_factory=lambda: [
+            "release_speed",
+            "release_spin_rate",
+            "pfx_x",
+            "pfx_z",
+            "plate_x",
+            "plate_z",
+        ]
+    )
+    ordinal_features: list[str] = field(
+        default_factory=lambda: [
+            "inning_clipped",
+            "is_inning_top",
+            "diff_score_clipped",
+            "pitch_number_clipped",
+        ]
+    )
 
     # ターゲット
     target_cls_swing_attempt: str = "swing_attempt"
     target_cls_swing_result: str = "swing_result"
     target_cls_bb_type: str = "bb_type"
-    target_reg: list[str] = field(default_factory=lambda: [
-        "launch_speed", "launch_angle", "hit_distance_sc",
-    ])
+    target_reg: list[str] = field(
+        default_factory=lambda: [
+            "launch_speed",
+            "launch_angle",
+            "hit_distance_sc",
+        ]
+    )
 
 
 @dataclass

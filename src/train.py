@@ -6,6 +6,26 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+# src ディレクトリを起点にインポート
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config import DataConfig, ModelConfig, TrainConfig, load_config
+from dataset import (
+    StatcastDataset,
+    compute_embedding_dim,
+    compute_normalization_stats,
+    get_num_classes,
+    load_parquet_files,
+    load_stats,
+)
+from model import AtBatDNN
+
 
 class TeeStream:
     """stdout/stderr を端末とファイルの両方に書き込むストリーム.
@@ -58,26 +78,6 @@ class TeeStream:
     def isatty(self):
         return self.stream.isatty()
 
-import numpy as np
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
-# src ディレクトリを起点にインポート
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from config import DataConfig, ModelConfig, TrainConfig, load_config
-from dataset import (
-    StatcastDataset,
-    compute_embedding_dim,
-    compute_normalization_stats,
-    get_num_classes,
-    load_parquet_files,
-    load_stats,
-)
-from model import AtBatDNN
-
 
 def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> AtBatDNN:
     """stats 情報から embedding_dims を設定してモデルを構築する."""
@@ -116,17 +116,13 @@ def compute_loss(
     losses = {}
 
     # 1. swing_attempt (binary cross-entropy)
-    loss_sa = nn.functional.binary_cross_entropy_with_logits(
-        outputs["swing_attempt"], batch["swing_attempt"]
-    )
+    loss_sa = nn.functional.binary_cross_entropy_with_logits(outputs["swing_attempt"], batch["swing_attempt"])
     losses["swing_attempt"] = loss_sa.item()
 
     # 2. swing_result (cross-entropy, swing_attempt=True のサンプルのみ)
     sr_mask = batch["swing_result"] >= 0
     if sr_mask.any():
-        loss_sr = nn.functional.cross_entropy(
-            outputs["swing_result"][sr_mask], batch["swing_result"][sr_mask]
-        )
+        loss_sr = nn.functional.cross_entropy(outputs["swing_result"][sr_mask], batch["swing_result"][sr_mask])
     else:
         loss_sr = torch.tensor(0.0, device=outputs["swing_attempt"].device)
     losses["swing_result"] = loss_sr.item()
@@ -134,9 +130,7 @@ def compute_loss(
     # 3. bb_type (cross-entropy, swing_result==1 のサンプルのみ)
     bt_mask = batch["bb_type"] >= 0
     if bt_mask.any():
-        loss_bt = nn.functional.cross_entropy(
-            outputs["bb_type"][bt_mask], batch["bb_type"][bt_mask]
-        )
+        loss_bt = nn.functional.cross_entropy(outputs["bb_type"][bt_mask], batch["bb_type"][bt_mask])
     else:
         loss_bt = torch.tensor(0.0, device=outputs["swing_attempt"].device)
     losses["bb_type"] = loss_bt.item()
@@ -145,7 +139,7 @@ def compute_loss(
     reg_mask = batch["reg_mask"]  # (B, 3)
     if reg_mask.any():
         diff = (outputs["regression"] - batch["reg_targets"]) * reg_mask
-        loss_reg = (diff ** 2).sum() / reg_mask.sum().clamp(min=1)
+        loss_reg = (diff**2).sum() / reg_mask.sum().clamp(min=1)
     else:
         loss_reg = torch.tensor(0.0, device=outputs["swing_attempt"].device)
     losses["regression"] = loss_reg.item()
@@ -235,10 +229,19 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ログを端末とファイルの両方に出力
-    log_file = open(output_dir / "train.log", "w")
-    sys.stdout = TeeStream(log_file, sys.__stdout__)
-    sys.stderr = TeeStream(log_file, sys.__stderr__)
+    with open(output_dir / "train.log", "w") as log_file:
+        sys.stdout = TeeStream(log_file, sys.__stdout__)
+        sys.stderr = TeeStream(log_file, sys.__stderr__)
+        try:
+            _train(data_cfg, model_cfg, train_cfg, output_dir, log_file)
+        finally:
+            sys.stdout.close_log()
+            sys.stderr.close_log()
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
+
+def _train(data_cfg, model_cfg, train_cfg, output_dir, log_file):
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
@@ -274,12 +277,19 @@ def main():
     del train_df, val_df  # メモリ解放
 
     train_loader = DataLoader(
-        train_ds, batch_size=train_cfg.batch_size, shuffle=True,
-        num_workers=train_cfg.num_workers, pin_memory=True, drop_last=True,
+        train_ds,
+        batch_size=train_cfg.batch_size,
+        shuffle=True,
+        num_workers=train_cfg.num_workers,
+        pin_memory=True,
+        drop_last=True,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=train_cfg.batch_size, shuffle=False,
-        num_workers=train_cfg.num_workers, pin_memory=True,
+        val_ds,
+        batch_size=train_cfg.batch_size,
+        shuffle=False,
+        num_workers=train_cfg.num_workers,
+        pin_memory=True,
     )
 
     # === モデル構築 ===
@@ -372,12 +382,6 @@ def main():
 
     print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
     print(f"Outputs saved to: {output_dir}")
-
-    # ログファイルを閉じてストリームを復元
-    sys.stdout.close_log()
-    sys.stderr.close_log()
-    sys.stdout = sys.__stdout__
-    sys.stderr = sys.__stderr__
 
 
 if __name__ == "__main__":

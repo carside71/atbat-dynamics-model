@@ -6,6 +6,30 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+import torch
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    roc_auc_score,
+)
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+
+from config import DataConfig, ModelConfig, TrainConfig, load_config
+from dataset import StatcastDataset, load_parquet_files, load_stats
+from model import AtBatDNN
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 class TeeStream:
     """stdout/stderr を端末とファイルの両方に書き込むストリーム.
@@ -57,29 +81,6 @@ class TeeStream:
 
     def isatty(self):
         return self.stream.isatty()
-
-import numpy as np
-import pandas as pd
-import torch
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
-    roc_auc_score,
-)
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from config import DataConfig, ModelConfig, TrainConfig, load_config
-from dataset import StatcastDataset, load_parquet_files, load_stats
-from model import AtBatDNN
-from train import build_model
 
 
 def load_trained_model(
@@ -195,7 +196,9 @@ def evaluate_multiclass(
 
     labels = sorted(np.unique(np.concatenate([true, pred])))
     target_names = [class_names[i] if class_names and i < len(class_names) else str(i) for i in labels]
-    report = classification_report(true, pred, labels=labels, target_names=target_names, output_dict=True, zero_division=0)
+    report = classification_report(
+        true, pred, labels=labels, target_names=target_names, output_dict=True, zero_division=0
+    )
     cm = confusion_matrix(true, pred, labels=labels)
     metrics["confusion_matrix"] = cm.tolist()
     metrics["classification_report"] = report
@@ -250,10 +253,10 @@ def print_results(results: dict) -> None:
     print(f"  F1       : {sa['f1']:.4f}")
     print(f"  ROC AUC  : {sa['roc_auc']:.4f}")
     cm = np.array(sa["confusion_matrix"])
-    print(f"  Confusion Matrix:")
+    print("  Confusion Matrix:")
     print(f"    {'':>12s} pred_no  pred_yes")
-    print(f"    {'true_no':>12s} {cm[0,0]:>7d}  {cm[0,1]:>8d}")
-    print(f"    {'true_yes':>12s} {cm[1,0]:>7d}  {cm[1,1]:>8d}")
+    print(f"    {'true_no':>12s} {cm[0, 0]:>7d}  {cm[0, 1]:>8d}")
+    print(f"    {'true_yes':>12s} {cm[1, 0]:>7d}  {cm[1, 1]:>8d}")
 
     # swing_result
     sr = results["swing_result"]
@@ -263,10 +266,12 @@ def print_results(results: dict) -> None:
         print(f"  F1 (macro) : {sr['f1_macro']:.4f}")
         print(f"  F1 (weighted): {sr['f1_weighted']:.4f}")
         report = sr["classification_report"]
-        print(f"  Per-class F1:")
+        print("  Per-class F1:")
         for k, v in report.items():
             if isinstance(v, dict) and "f1-score" in v:
-                print(f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}")
+                print(
+                    f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
+                )
 
     # bb_type
     bt = results["bb_type"]
@@ -276,14 +281,16 @@ def print_results(results: dict) -> None:
         print(f"  F1 (macro) : {bt['f1_macro']:.4f}")
         print(f"  F1 (weighted): {bt['f1_weighted']:.4f}")
         report = bt["classification_report"]
-        print(f"  Per-class F1:")
+        print("  Per-class F1:")
         for k, v in report.items():
             if isinstance(v, dict) and "f1-score" in v:
-                print(f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}")
+                print(
+                    f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
+                )
 
     # regression
     reg = results["regression"]
-    print(f"\n--- regression (original scale) ---")
+    print("\n--- regression (original scale) ---")
     for col, m in reg.items():
         if m["n_samples"] == 0:
             print(f"  {col}: no valid samples")
@@ -299,9 +306,15 @@ def print_results(results: dict) -> None:
 def main():
     parser = argparse.ArgumentParser(description="AtBat Dynamics Model Test")
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
-    parser.add_argument("--model-dir", type=str, default=None, help="Directory containing model files (overrides config output_dir)")
-    parser.add_argument("--model-file", type=str, default="best_model.pt", help="Model weights filename (default: best_model.pt)")
-    parser.add_argument("--split", type=str, default="test", choices=["test", "val"], help="Which split to evaluate (default: test)")
+    parser.add_argument(
+        "--model-dir", type=str, default=None, help="Directory containing model files (overrides config output_dir)"
+    )
+    parser.add_argument(
+        "--model-file", type=str, default="best_model.pt", help="Model weights filename (default: best_model.pt)"
+    )
+    parser.add_argument(
+        "--split", type=str, default="test", choices=["test", "val"], help="Which split to evaluate (default: test)"
+    )
     args = parser.parse_args()
 
     if args.config:
@@ -318,10 +331,19 @@ def main():
     test_output_dir = model_dir / "test" / timestamp
     test_output_dir.mkdir(parents=True, exist_ok=True)
 
-    log_file = open(test_output_dir / "test.log", "w")
-    sys.stdout = TeeStream(log_file, sys.__stdout__)
-    sys.stderr = TeeStream(log_file, sys.__stderr__)
+    with open(test_output_dir / "test.log", "w") as log_file:
+        sys.stdout = TeeStream(log_file, sys.__stdout__)
+        sys.stderr = TeeStream(log_file, sys.__stderr__)
+        try:
+            _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device, log_file)
+        finally:
+            sys.stdout.close_log()
+            sys.stderr.close_log()
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
+
+def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device, log_file):
     print(f"Device: {device}")
 
     # === Stats 読み込み ===
@@ -348,8 +370,11 @@ def main():
     del test_df
 
     test_loader = DataLoader(
-        test_ds, batch_size=train_cfg.batch_size, shuffle=False,
-        num_workers=train_cfg.num_workers, pin_memory=True,
+        test_ds,
+        batch_size=train_cfg.batch_size,
+        shuffle=False,
+        num_workers=train_cfg.num_workers,
+        pin_memory=True,
     )
 
     # === モデル読み込み ===
@@ -367,8 +392,11 @@ def main():
     results["swing_result"] = evaluate_multiclass(preds["sr_logits"], preds["sr_true"], sr_names, "swing_result")
     results["bb_type"] = evaluate_multiclass(preds["bt_logits"], preds["bt_true"], bt_names, "bb_type")
     results["regression"] = evaluate_regression(
-        preds["reg_pred"], preds["reg_true"], preds["reg_mask"],
-        data_cfg.target_reg, reg_norm_stats,
+        preds["reg_pred"],
+        preds["reg_true"],
+        preds["reg_mask"],
+        data_cfg.target_reg,
+        reg_norm_stats,
     )
 
     print_results(results)
@@ -378,12 +406,6 @@ def main():
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\nResults saved to {output_path}")
-
-    # ログファイルを閉じてストリームを復元
-    sys.stdout.close_log()
-    sys.stderr.close_log()
-    sys.stdout = sys.__stdout__
-    sys.stderr = sys.__stderr__
 
 
 if __name__ == "__main__":

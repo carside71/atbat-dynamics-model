@@ -39,7 +39,7 @@ def get_num_classes(stats: dict[str, pd.DataFrame]) -> dict[str, int]:
 
 def compute_embedding_dim(num_classes: int, max_dim: int = 50) -> int:
     """カテゴリ数から埋め込み次元を決定するヒューリスティック."""
-    return min(max_dim, max(2, int(num_classes ** 0.25 * 4)))
+    return min(max_dim, max(2, int(num_classes**0.25 * 4)))
 
 
 def load_parquet_files(data_dir: Path, years: list[int]) -> pd.DataFrame:
@@ -95,14 +95,18 @@ class StatcastDataset(Dataset):
                 vals = (vals - mean) / std
             vals = np.nan_to_num(vals, nan=0.0)
             cont_arrays.append(vals)
-        self.cont_features = torch.from_numpy(np.column_stack(cont_arrays) if cont_arrays else np.empty((len(df), 0), dtype=np.float32))
+        self.cont_features = torch.from_numpy(
+            np.column_stack(cont_arrays) if cont_arrays else np.empty((len(df), 0), dtype=np.float32)
+        )
 
         # === 順序特徴量（float にキャスト） ===
         ord_arrays = []
         for col in cfg.ordinal_features:
             vals = df[col].to_numpy(dtype=np.float32)
             ord_arrays.append(vals)
-        self.ord_features = torch.from_numpy(np.column_stack(ord_arrays) if ord_arrays else np.empty((len(df), 0), dtype=np.float32))
+        self.ord_features = torch.from_numpy(
+            np.column_stack(ord_arrays) if ord_arrays else np.empty((len(df), 0), dtype=np.float32)
+        )
 
         # === ターゲット ===
         # swing_attempt: bool → 0/1
