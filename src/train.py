@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -170,12 +171,15 @@ def main():
 
     if args.config:
         data_cfg, model_cfg, train_cfg = load_config(args.config)
+        config_name = Path(args.config).stem
     else:
         data_cfg = DataConfig()
         model_cfg = ModelConfig()
         train_cfg = TrainConfig()
+        config_name = "default"
 
-    output_dir = data_cfg.output_dir
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    output_dir = data_cfg.output_dir / config_name / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")

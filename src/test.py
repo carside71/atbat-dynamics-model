@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -311,7 +312,11 @@ def main():
     print_results(results)
 
     # === 結果を JSON で保存 ===
-    output_path = model_dir / f"test_results_{args.split}.json"
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    test_output_dir = model_dir / "test" / timestamp
+    test_output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = test_output_dir / f"test_results_{args.split}.json"
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\nResults saved to {output_path}")

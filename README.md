@@ -103,7 +103,7 @@ python3 src/train.py --config configs/config.yaml
 python3 src/train.py
 ```
 
-学習が完了すると、`output_dir`（デフォルト: `/workspace/outputs/atbat-dynamics-model/`）に以下が保存されます。
+学習が完了すると、`output_dir`（デフォルト: `/workspace/outputs/`）に以下が保存されます。
 
 | ファイル | 内容 |
 |---|---|
