@@ -47,4 +47,4 @@ def get_available_models() -> list[str]:
 # モデルモジュールのインポート（登録を実行するため）
 # 新しいモデルを追加したらここに import を追加する
 # ---------------------------------------------------------------------------
-from models import atbat_dnn  # noqa: E402, F401
+from models import atbat_dnn, atbat_dnn_mdn  # noqa: E402, F401

@@ -74,3 +74,4 @@ model:
 | 名前 | ファイル | 説明 |
 |------|----------|------|
 | `atbat_dnn` | `atbat_dnn.py` | 共有バックボーン + 4 ヘッドの MLP |
+| `atbat_dnn_mdn` | `atbat_dnn_mdn.py` | 分類ヘッドは同一、回帰ヘッドを MDN (Mixture Density Network) に置換 |

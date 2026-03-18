@@ -104,6 +104,7 @@ def load_trained_model(
         dropout=saved["dropout"],
         num_swing_result=saved["num_swing_result"],
         num_bb_type=saved["num_bb_type"],
+        mdn_num_components=saved.get("mdn_num_components", 5),
     )
     model = create_model(architecture, model_cfg, saved["num_cont"], saved["num_ord"])
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
@@ -139,7 +140,16 @@ def collect_predictions(
         all_bt_logits.append(outputs["bb_type"].cpu().numpy())
         all_bt_true.append(batch["bb_type"].cpu().numpy())
 
-        all_reg_pred.append(outputs["regression"].cpu().numpy())
+        reg_out = outputs["regression"]
+        if isinstance(reg_out, dict):
+            # MDN: 混合係数で重み付けした期待値を点推定とする
+            pi = reg_out["pi"]  # (B, K)
+            mu = reg_out["mu"]  # (B, K, D)
+            # E[y] = sum_k pi_k * mu_k
+            reg_pred = (pi.unsqueeze(-1) * mu).sum(dim=1)  # (B, D)
+            all_reg_pred.append(reg_pred.cpu().numpy())
+        else:
+            all_reg_pred.append(reg_out.cpu().numpy())
         all_reg_true.append(batch["reg_targets"].cpu().numpy())
         all_reg_mask.append(batch["reg_mask"].cpu().numpy())
 

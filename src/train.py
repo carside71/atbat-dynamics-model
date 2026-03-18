@@ -107,6 +107,39 @@ def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> nn
     return create_model(model_cfg.architecture, model_cfg, num_cont, num_ord)
 
 
+def _mdn_loss(
+    mdn_out: dict[str, torch.Tensor],
+    targets: torch.Tensor,
+    mask: torch.Tensor,
+) -> torch.Tensor:
+    """MDN の負の対数尤度損失（マスク付き）.
+
+    Args:
+        mdn_out: {"pi": (B, K), "mu": (B, K, D), "sigma": (B, K, D)}
+        targets: (B, D) 真値
+        mask: (B, D) 有効フラグ
+    """
+    # 全次元が有効なサンプルのみを対象にする
+    sample_mask = mask.all(dim=-1)  # (B,)
+    if not sample_mask.any():
+        return torch.tensor(0.0, device=targets.device)
+
+    pi = mdn_out["pi"][sample_mask]  # (N, K)
+    mu = mdn_out["mu"][sample_mask]  # (N, K, D)
+    sigma = mdn_out["sigma"][sample_mask]  # (N, K, D)
+    t = targets[sample_mask].unsqueeze(1)  # (N, 1, D)
+
+    # 各成分のガウス対数尤度: sum over D dimensions
+    log_prob = -0.5 * (((t - mu) / sigma) ** 2 + 2 * torch.log(sigma) + 1.8378770664093453)  # ln(2π)
+    log_prob = log_prob.sum(dim=-1)  # (N, K)
+
+    # log-sum-exp over components
+    log_pi = torch.log(pi + 1e-8)
+    log_likelihood = torch.logsumexp(log_pi + log_prob, dim=-1)  # (N,)
+
+    return -log_likelihood.mean()
+
+
 def compute_loss(
     outputs: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
@@ -135,10 +168,15 @@ def compute_loss(
         loss_bt = torch.tensor(0.0, device=outputs["swing_attempt"].device)
     losses["bb_type"] = loss_bt.item()
 
-    # 4. regression (MSE, 有効なサンプルのみ)
+    # 4. regression
     reg_mask = batch["reg_mask"]  # (B, 3)
-    if reg_mask.any():
-        diff = (outputs["regression"] - batch["reg_targets"]) * reg_mask
+    reg_out = outputs["regression"]
+    if isinstance(reg_out, dict):
+        # MDN: 負の対数尤度
+        loss_reg = _mdn_loss(reg_out, batch["reg_targets"], reg_mask)
+    elif reg_mask.any():
+        # 通常の MSE
+        diff = (reg_out - batch["reg_targets"]) * reg_mask
         loss_reg = (diff**2).sum() / reg_mask.sum().clamp(min=1)
     else:
         loss_reg = torch.tensor(0.0, device=outputs["swing_attempt"].device)
@@ -310,6 +348,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir, log_file):
         "dropout": model_cfg.dropout,
         "num_swing_result": model_cfg.num_swing_result,
         "num_bb_type": model_cfg.num_bb_type,
+        "mdn_num_components": model_cfg.mdn_num_components,
         "num_cont": len(data_cfg.continuous_features),
         "num_ord": len(data_cfg.ordinal_features),
     }

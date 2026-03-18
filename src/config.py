@@ -77,6 +77,9 @@ class ModelConfig:
     num_swing_result: int = 9
     num_bb_type: int = 4
 
+    # MDN パラメータ（atbat_dnn_mdn 等で使用）
+    mdn_num_components: int = 5
+
 
 @dataclass
 class TrainConfig:

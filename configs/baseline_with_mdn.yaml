@@ -1,0 +1,59 @@
+# AtBat Dynamics Model 設定ファイル
+# 各セクション内のフィールドは省略可能（デフォルト値が使われます）
+
+data:
+  data_dir: /workspace/datasets/statcast-customized/data
+  stats_dir: /workspace/datasets/statcast-customized/stats
+  output_dir: /workspace/outputs
+  train_years: [2017, 2018, 2019, 2020, 2021, 2022, 2023]
+  val_years: [2024]
+  test_years: [2025]
+
+  categorical_features:
+    - p_throws
+    - pitch_type
+    - batter
+    - stand
+    - base_out_state
+    - count_state
+  continuous_features:
+    - release_speed
+    - release_spin_rate
+    - pfx_x
+    - pfx_z
+    - plate_x
+    - plate_z
+  ordinal_features:
+    - inning_clipped
+    - is_inning_top
+    - diff_score_clipped
+    - pitch_number_clipped
+
+  target_cls_swing_attempt: swing_attempt
+  target_cls_swing_result: swing_result
+  target_cls_bb_type: bb_type
+  target_reg:
+    - launch_speed
+    - launch_angle
+    - hit_distance_sc
+
+model:
+  architecture: atbat_dnn_mdn
+  mdn_num_components: 5
+  backbone_hidden: [512, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+
+train:
+  batch_size: 4096
+  num_epochs: 30
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  num_workers: 4
+  device: cuda
+  seed: 42
+
+  loss_weight_swing_attempt: 1.0
+  loss_weight_swing_result: 1.0
+  loss_weight_bb_type: 1.0
+  loss_weight_regression: 0.01
