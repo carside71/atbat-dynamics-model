@@ -25,7 +25,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, TrainConfig, load_config
-from dataset import StatcastDataset, load_parquet_files, load_stats
+from dataset import StatcastDataset, load_all_parquet_files, load_split_at_bat_ids, load_stats
 from utils.logging import tee_logging
 from utils.model_io import load_trained_model
 
@@ -283,9 +283,11 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     reg_norm_stats = {k: tuple(v) for k, v in norm_params["target"].items()}
 
     # === テストデータ読み込み ===
-    eval_years = data_cfg.test_years if args.split == "test" else data_cfg.val_years
-    print(f"Loading {args.split} data (years={eval_years})...")
-    test_df = load_parquet_files(data_cfg.data_dir, eval_years)
+    print(f"Loading {args.split} data...")
+    all_df = load_all_parquet_files(data_cfg.data_dir)
+    split_ids = load_split_at_bat_ids(data_cfg.split_dir, args.split)
+    test_df = all_df[all_df["at_bat_id"].isin(split_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
+    del all_df
     print(f"  Samples: {len(test_df):,}")
 
     test_ds = StatcastDataset(test_df, data_cfg, norm_stats, reg_norm_stats)

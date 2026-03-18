@@ -4,10 +4,8 @@
 data:
   data_dir: /workspace/datasets/statcast-customized/data
   stats_dir: /workspace/datasets/statcast-customized/stats
+  split_dir: /workspace/datasets/statcast-customized/split
   output_dir: /workspace/outputs
-  train_years: [2017, 2018, 2019, 2020, 2021, 2022, 2023]
-  val_years: [2024]
-  test_years: [2025]
 
   categorical_features:
     - p_throws

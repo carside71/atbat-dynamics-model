@@ -42,16 +42,28 @@ def compute_embedding_dim(num_classes: int, max_dim: int = 50) -> int:
     return min(max_dim, max(2, int(num_classes**0.25 * 4)))
 
 
-def load_parquet_files(data_dir: Path, years: list[int]) -> pd.DataFrame:
-    """指定年度の parquet ファイルを結合して読み込む."""
-    files = []
-    for year in years:
-        pattern = str(data_dir / f"statcast_{year}_*.parquet")
-        files.extend(sorted(glob.glob(pattern)))
+def load_all_parquet_files(data_dir: Path) -> pd.DataFrame:
+    """data ディレクトリ内の全 parquet ファイルを結合して読み込む."""
+    files = sorted(glob.glob(str(data_dir / "*.parquet")))
     if not files:
-        raise FileNotFoundError(f"No parquet files found for years {years} in {data_dir}")
+        raise FileNotFoundError(f"No parquet files found in {data_dir}")
     dfs = [pd.read_parquet(f) for f in files]
     return pd.concat(dfs, ignore_index=True)
+
+
+def load_split_at_bat_ids(split_dir: Path, split: str) -> set[int]:
+    """split ディレクトリから指定された分割の at_bat_id 集合を読み込む."""
+    filename_map = {
+        "train": "train_at_bat_ids.csv",
+        "val": "valid_at_bat_ids.csv",
+        "valid": "valid_at_bat_ids.csv",
+        "test": "test_at_bat_ids.csv",
+    }
+    if split not in filename_map:
+        raise ValueError(f"Unknown split: {split}. Use one of {list(filename_map.keys())}")
+    filepath = split_dir / filename_map[split]
+    df = pd.read_csv(filepath)
+    return set(df["at_bat_id"].tolist())
 
 
 def compute_normalization_stats(df: pd.DataFrame, columns: list[str]) -> dict[str, tuple[float, float]]:

@@ -19,7 +19,8 @@ from config import DataConfig, ModelConfig, TrainConfig, load_config
 from dataset import (
     StatcastDataset,
     compute_normalization_stats,
-    load_parquet_files,
+    load_all_parquet_files,
+    load_split_at_bat_ids,
     load_stats,
 )
 from utils.logging import tee_logging
@@ -201,12 +202,17 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     print("Loading stats...")
     stats = load_stats(data_cfg.stats_dir)
 
-    print("Loading training data...")
-    train_df = load_parquet_files(data_cfg.data_dir, data_cfg.train_years)
-    print(f"  Train samples: {len(train_df):,}")
+    print("Loading data...")
+    all_df = load_all_parquet_files(data_cfg.data_dir)
+    print(f"  Total samples: {len(all_df):,}")
 
-    print("Loading validation data...")
-    val_df = load_parquet_files(data_cfg.data_dir, data_cfg.val_years)
+    print("Splitting by at_bat_id...")
+    train_ids = load_split_at_bat_ids(data_cfg.split_dir, "train")
+    val_ids = load_split_at_bat_ids(data_cfg.split_dir, "val")
+    train_df = all_df[all_df["at_bat_id"].isin(train_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
+    val_df = all_df[all_df["at_bat_id"].isin(val_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
+    del all_df
+    print(f"  Train samples: {len(train_df):,}")
     print(f"  Val samples: {len(val_df):,}")
 
     # === 正規化パラメータを訓練データから計算 ===

@@ -38,11 +38,6 @@ def create_model(name: str, cfg: ModelConfig, num_cont: int, num_ord: int) -> nn
     return _MODEL_REGISTRY[name](cfg, num_cont, num_ord)
 
 
-def get_available_models() -> list[str]:
-    """登録済みモデル名の一覧を返す."""
-    return sorted(_MODEL_REGISTRY)
-
-
 # ---------------------------------------------------------------------------
 # モデルモジュールのインポート（登録を実行するため）
 # 新しいモデルを追加したらここに import を追加する

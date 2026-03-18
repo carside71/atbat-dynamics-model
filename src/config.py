@@ -11,10 +11,8 @@ import yaml
 class DataConfig:
     data_dir: Path = Path("/workspace/datasets/statcast-customized/data")
     stats_dir: Path = Path("/workspace/datasets/statcast-customized/stats")
+    split_dir: Path = Path("/workspace/datasets/statcast-customized/split")
     output_dir: Path = Path("/workspace/outputs/atbat-dynamics-model")
-    train_years: list[int] = field(default_factory=lambda: [2017, 2018, 2019, 2020, 2021, 2022, 2023])
-    val_years: list[int] = field(default_factory=lambda: [2024])
-    test_years: list[int] = field(default_factory=lambda: [2025])
 
     # 入力特徴量
     categorical_features: list[str] = field(
