@@ -17,3 +17,6 @@ WORKDIR /workspace
 # （リポジトリに requirements.txt がある前提です）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Linter/Formatter 設定をイメージに含める
+COPY pyproject.toml .

@@ -2,6 +2,18 @@
 
 Statcast の投球・打席データから打席結果を予測するマルチヘッド DNN モデルです。
 
+## 目次
+
+- [概要](#概要)
+- [プロジェクト構成](#プロジェクト構成)
+- [必要条件](#必要条件)
+- [セットアップ](#セットアップ)
+- [データセット](#データセット)
+- [設定](#設定)
+- [学習](#学習)
+- [テスト・性能評価](#テスト性能評価)
+- [Linter / Formatter (Ruff)](#linter--formatter-ruff)
+
 ## 概要
 
 投球情報（球種・球速・変化量・コース）と打席状況（打者・カウント・走者/アウト状況・イニング・点差）を入力として、以下の4つを同時に予測します。
@@ -138,3 +150,42 @@ python3 src/test.py --model-dir /path/to/model --model-file best_model.pt
 | regression | MAE, RMSE, R²（元スケールに逆変換） |
 
 結果はコンソールに表示されるほか、`test_results_test.json` / `test_results_val.json` としてモデルディレクトリに保存されます。
+
+## Linter / Formatter (Ruff)
+
+コード品質を統一するために [Ruff](https://docs.astral.sh/ruff/) を導入しています。Ruff は linter と formatter の両方を兼ねた高速な Python ツールです。
+
+### 設定
+
+ルールは `pyproject.toml` に定義されています。
+
+| 項目 | 値 |
+|---|---|
+| 行長制限 | 120 文字 |
+| Lint ルール | pycodestyle, pyflakes, isort, pyupgrade, flake8-bugbear, flake8-simplify |
+| フォーマット | ダブルクォート、スペースインデント |
+
+### CLI での使い方
+
+```bash
+# Lint チェック
+ruff check src/
+
+# Lint チェック + 自動修正
+ruff check --fix src/
+
+# フォーマット
+ruff format src/
+
+# フォーマット差分確認（変更なし）
+ruff format --check src/
+```
+
+### VS Code での自動フォーマット
+
+Docker コンテナ起動スクリプト（`run_container_wsl.sh` / `run_container_mac.sh`）に `devcontainer.metadata` ラベルが設定されています。VS Code の **Dev Containers** 拡張（`ms-vscode-remote.remote-containers`）でコンテナにアタッチすると、以下が自動的に行われます。
+
+1. **Ruff 拡張機能**（`charliermarsh.ruff`）が自動インストールされる
+2. **保存時（Ctrl+S）** にフォーマット・lint 自動修正・import ソートが実行される
+
+> **前提**: ホスト側の VS Code に [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) 拡張がインストールされている必要があります。
