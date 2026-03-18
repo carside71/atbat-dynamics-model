@@ -95,6 +95,10 @@ class TrainConfig:
     loss_weight_bb_type: float = 1.0
     loss_weight_regression: float = 0.01
 
+    # Focal Loss 設定
+    focal_gamma: float = 0.0  # 0.0 で通常の cross-entropy と同等
+    use_class_weight: bool = False  # クラス頻度の逆数で重み付け
+
 
 def _apply_overrides(obj: Any, overrides: dict) -> None:
     """辞書の値をdataclassフィールドに適用する."""

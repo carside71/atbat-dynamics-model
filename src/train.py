@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -23,94 +24,33 @@ from dataset import (
     load_split_at_bat_ids,
     load_stats,
 )
+from losses import FocalLoss, compute_loss
 from utils.logging import tee_logging
 from utils.model_io import build_model, save_model_config
 
 
-def _mdn_loss(
-    mdn_out: dict[str, torch.Tensor],
-    targets: torch.Tensor,
-    mask: torch.Tensor,
-) -> torch.Tensor:
-    """MDN の負の対数尤度損失（マスク付き）.
-
-    Args:
-        mdn_out: {"pi": (B, K), "mu": (B, K, D), "sigma": (B, K, D)}
-        targets: (B, D) 真値
-        mask: (B, D) 有効フラグ
-    """
-    # 全次元が有効なサンプルのみを対象にする
-    sample_mask = mask.all(dim=-1)  # (B,)
-    if not sample_mask.any():
-        return torch.tensor(0.0, device=targets.device)
-
-    pi = mdn_out["pi"][sample_mask]  # (N, K)
-    mu = mdn_out["mu"][sample_mask]  # (N, K, D)
-    sigma = mdn_out["sigma"][sample_mask]  # (N, K, D)
-    t = targets[sample_mask].unsqueeze(1)  # (N, 1, D)
-
-    # 各成分のガウス対数尤度: sum over D dimensions
-    log_prob = -0.5 * (((t - mu) / sigma) ** 2 + 2 * torch.log(sigma) + 1.8378770664093453)  # ln(2π)
-    log_prob = log_prob.sum(dim=-1)  # (N, K)
-
-    # log-sum-exp over components
-    log_pi = torch.log(pi + 1e-8)
-    log_likelihood = torch.logsumexp(log_pi + log_prob, dim=-1)  # (N,)
-
-    return -log_likelihood.mean()
+def _build_class_weights(stats: dict[str, pd.DataFrame], key: str, device: torch.device) -> torch.Tensor:
+    """stats からクラス頻度の逆数に基づく重みを計算する."""
+    counts = stats[key]["count"].to_numpy(dtype=np.float64)
+    weights = counts.sum() / (len(counts) * counts)
+    return torch.tensor(weights, dtype=torch.float32, device=device)
 
 
-def compute_loss(
-    outputs: dict[str, torch.Tensor],
-    batch: dict[str, torch.Tensor],
+def _build_loss_functions(
     train_cfg: TrainConfig,
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """階層的マスク付き損失を計算する."""
-    losses = {}
+    stats: dict[str, pd.DataFrame],
+    device: torch.device,
+) -> tuple[nn.Module | None, nn.Module | None]:
+    """swing_result / bb_type 用の損失関数を構築する."""
+    if train_cfg.focal_gamma == 0.0 and not train_cfg.use_class_weight:
+        return None, None  # 標準 cross-entropy を使用
 
-    # 1. swing_attempt (binary cross-entropy)
-    loss_sa = nn.functional.binary_cross_entropy_with_logits(outputs["swing_attempt"], batch["swing_attempt"])
-    losses["swing_attempt"] = loss_sa.item()
+    sr_weight = _build_class_weights(stats, "swing_result", device) if train_cfg.use_class_weight else None
+    bt_weight = _build_class_weights(stats, "bb_type", device) if train_cfg.use_class_weight else None
 
-    # 2. swing_result (cross-entropy, swing_attempt=True のサンプルのみ)
-    sr_mask = batch["swing_result"] >= 0
-    if sr_mask.any():
-        loss_sr = nn.functional.cross_entropy(outputs["swing_result"][sr_mask], batch["swing_result"][sr_mask])
-    else:
-        loss_sr = torch.tensor(0.0, device=outputs["swing_attempt"].device)
-    losses["swing_result"] = loss_sr.item()
-
-    # 3. bb_type (cross-entropy, swing_result==1 のサンプルのみ)
-    bt_mask = batch["bb_type"] >= 0
-    if bt_mask.any():
-        loss_bt = nn.functional.cross_entropy(outputs["bb_type"][bt_mask], batch["bb_type"][bt_mask])
-    else:
-        loss_bt = torch.tensor(0.0, device=outputs["swing_attempt"].device)
-    losses["bb_type"] = loss_bt.item()
-
-    # 4. regression
-    reg_mask = batch["reg_mask"]  # (B, 3)
-    reg_out = outputs["regression"]
-    if isinstance(reg_out, dict):
-        # MDN: 負の対数尤度
-        loss_reg = _mdn_loss(reg_out, batch["reg_targets"], reg_mask)
-    elif reg_mask.any():
-        # 通常の MSE
-        diff = (reg_out - batch["reg_targets"]) * reg_mask
-        loss_reg = (diff**2).sum() / reg_mask.sum().clamp(min=1)
-    else:
-        loss_reg = torch.tensor(0.0, device=outputs["swing_attempt"].device)
-    losses["regression"] = loss_reg.item()
-
-    total = (
-        train_cfg.loss_weight_swing_attempt * loss_sa
-        + train_cfg.loss_weight_swing_result * loss_sr
-        + train_cfg.loss_weight_bb_type * loss_bt
-        + train_cfg.loss_weight_regression * loss_reg
-    )
-    losses["total"] = total.item()
-
-    return total, losses
+    loss_fn_sr = FocalLoss(gamma=train_cfg.focal_gamma, weight=sr_weight)
+    loss_fn_bt = FocalLoss(gamma=train_cfg.focal_gamma, weight=bt_weight)
+    return loss_fn_sr, loss_fn_bt
 
 
 @torch.no_grad()
@@ -120,6 +60,8 @@ def evaluate(
     train_cfg: TrainConfig,
     data_cfg: DataConfig,
     device: torch.device,
+    loss_fn_sr: nn.Module | None = None,
+    loss_fn_bt: nn.Module | None = None,
 ) -> dict[str, float]:
     """検証データで評価を行い、損失とメトリクスを返す."""
     model.eval()
@@ -136,7 +78,7 @@ def evaluate(
         cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
         outputs = model(cat_dict, batch["cont"], batch["ord"])
 
-        _, losses = compute_loss(outputs, batch, train_cfg)
+        _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
         for k, v in losses.items():
             total_losses[k] = total_losses.get(k, 0.0) + v
         n_batches += 1
@@ -259,6 +201,11 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     # モデル設定を保存
     save_model_config(model_cfg, data_cfg, output_dir)
 
+    # === 損失関数 ===
+    loss_fn_sr, loss_fn_bt = _build_loss_functions(train_cfg, stats, device)
+    if loss_fn_sr is not None:
+        print(f"  Using FocalLoss (gamma={train_cfg.focal_gamma}, class_weight={train_cfg.use_class_weight})")
+
     # === 学習 ===
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=train_cfg.num_epochs)
@@ -279,7 +226,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
             optimizer.zero_grad()
             outputs = model(cat_dict, batch["cont"], batch["ord"])
-            loss, losses = compute_loss(outputs, batch, train_cfg)
+            loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -295,7 +242,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         avg_train = {k: v / max(n_batches, 1) for k, v in epoch_losses.items()}
 
         # 検証
-        val_metrics = evaluate(model, val_loader, train_cfg, data_cfg, device)
+        val_metrics = evaluate(model, val_loader, train_cfg, data_cfg, device, loss_fn_sr, loss_fn_bt)
 
         record = {"epoch": epoch, "lr": scheduler.get_last_lr()[0]}
         record.update({f"train_{k}": v for k, v in avg_train.items()})
