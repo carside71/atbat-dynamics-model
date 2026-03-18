@@ -61,6 +61,9 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
+    # モデルアーキテクチャ名（モデルレジストリのキー）
+    architecture: str = "atbat_dnn"
+
     # カテゴリカル特徴量の埋め込み次元（num_classes → embed_dim のマッピング）
     # 実行時に stats ファイルから自動設定される
     embedding_dims: dict[str, tuple[int, int]] = field(default_factory=dict)

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -26,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, ModelConfig, TrainConfig, load_config
 from dataset import StatcastDataset, load_parquet_files, load_stats
-from model import AtBatDNN
+from models import create_model
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -89,12 +90,14 @@ def load_trained_model(
     data_cfg: DataConfig,
     stats: dict,
     device: torch.device,
-) -> AtBatDNN:
+) -> nn.Module:
     """保存済みの重みとモデル設定からモデルを復元する."""
     with open(model_config_path) as f:
         saved = json.load(f)
 
+    architecture = saved.get("architecture", "atbat_dnn")
     model_cfg = ModelConfig(
+        architecture=architecture,
         embedding_dims={k: tuple(v) for k, v in saved["embedding_dims"].items()},
         backbone_hidden=saved["backbone_hidden"],
         head_hidden=saved["head_hidden"],
@@ -102,7 +105,7 @@ def load_trained_model(
         num_swing_result=saved["num_swing_result"],
         num_bb_type=saved["num_bb_type"],
     )
-    model = AtBatDNN(model_cfg, saved["num_cont"], saved["num_ord"])
+    model = create_model(architecture, model_cfg, saved["num_cont"], saved["num_ord"])
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.to(device)
     model.eval()
@@ -111,7 +114,7 @@ def load_trained_model(
 
 @torch.no_grad()
 def collect_predictions(
-    model: AtBatDNN,
+    model: nn.Module,
     loader: DataLoader,
     data_cfg: DataConfig,
     device: torch.device,

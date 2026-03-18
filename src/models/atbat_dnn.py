@@ -4,8 +4,10 @@ import torch
 import torch.nn as nn
 
 from config import ModelConfig
+from models import register_model
 
 
+@register_model("atbat_dnn")
 class AtBatDNN(nn.Module):
     """打席結果予測のマルチヘッド DNN.
 

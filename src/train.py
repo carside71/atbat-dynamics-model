@@ -24,7 +24,7 @@ from dataset import (
     load_parquet_files,
     load_stats,
 )
-from model import AtBatDNN
+from models import create_model
 
 
 class TeeStream:
@@ -79,8 +79,8 @@ class TeeStream:
         return self.stream.isatty()
 
 
-def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> AtBatDNN:
-    """stats 情報から embedding_dims を設定してモデルを構築する."""
+def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> nn.Module:
+    """»stats 情報から embedding_dims を設定してモデルを構築する."""
     num_classes = get_num_classes(stats)
 
     # 入力カテゴリカル特徴量のカーディナリティ
@@ -104,7 +104,7 @@ def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> At
     num_cont = len(data_cfg.continuous_features)
     num_ord = len(data_cfg.ordinal_features)
 
-    return AtBatDNN(model_cfg, num_cont, num_ord)
+    return create_model(model_cfg.architecture, model_cfg, num_cont, num_ord)
 
 
 def compute_loss(
@@ -157,7 +157,7 @@ def compute_loss(
 
 @torch.no_grad()
 def evaluate(
-    model: AtBatDNN,
+    model: nn.Module,
     loader: DataLoader,
     train_cfg: TrainConfig,
     data_cfg: DataConfig,
@@ -303,6 +303,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir, log_file):
 
     # モデル設定を保存
     model_info = {
+        "architecture": model_cfg.architecture,
         "embedding_dims": model_cfg.embedding_dims,
         "backbone_hidden": model_cfg.backbone_hidden,
         "head_hidden": model_cfg.head_hidden,
