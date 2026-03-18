@@ -6,6 +6,58 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+
+class TeeStream:
+    """stdout/stderr を端末とファイルの両方に書き込むストリーム.
+
+    tqdm 等の \r による上書き更新はファイル側ではバッファリングし、
+    最終状態のみを書き込むことでログの肥大化を防ぐ。
+    """
+
+    def __init__(self, file, stream):
+        self.file = file
+        self.stream = stream
+        self._line_buf = ""
+        self._closed = False
+
+    def write(self, data):
+        self.stream.write(data)
+        if self._closed:
+            return
+        # ファイル側: \r を考慮してバッファリング
+        self._line_buf += data
+        while "\n" in self._line_buf:
+            line, self._line_buf = self._line_buf.split("\n", 1)
+            # \r がある場合は最後の \r 以降だけ残す（上書き表現）
+            if "\r" in line:
+                line = line.rsplit("\r", 1)[-1]
+            self.file.write(line + "\n")
+            self.file.flush()
+        # バッファ中に \r があれば先頭まで巻き戻す
+        if "\r" in self._line_buf:
+            self._line_buf = self._line_buf.rsplit("\r", 1)[-1]
+
+    def flush(self):
+        self.stream.flush()
+        if not self._closed:
+            self.file.flush()
+
+    def close_log(self):
+        """残バッファをフラッシュしてファイルを閉じる."""
+        if self._closed:
+            return
+        if self._line_buf.strip():
+            if "\r" in self._line_buf:
+                self._line_buf = self._line_buf.rsplit("\r", 1)[-1]
+            self.file.write(self._line_buf + "\n")
+        self._line_buf = ""
+        self.file.flush()
+        self.file.close()
+        self._closed = True
+
+    def isatty(self):
+        return self.stream.isatty()
+
 import numpy as np
 import pandas as pd
 import torch
@@ -260,6 +312,16 @@ def main():
 
     model_dir = Path(args.model_dir) if args.model_dir else data_cfg.output_dir
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")
+
+    # テスト出力ディレクトリを先に作成し、ログを端末とファイルの両方に出力
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    test_output_dir = model_dir / "test" / timestamp
+    test_output_dir.mkdir(parents=True, exist_ok=True)
+
+    log_file = open(test_output_dir / "test.log", "w")
+    sys.stdout = TeeStream(log_file, sys.__stdout__)
+    sys.stderr = TeeStream(log_file, sys.__stderr__)
+
     print(f"Device: {device}")
 
     # === Stats 読み込み ===
@@ -312,14 +374,16 @@ def main():
     print_results(results)
 
     # === 結果を JSON で保存 ===
-    timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    test_output_dir = model_dir / "test" / timestamp
-    test_output_dir.mkdir(parents=True, exist_ok=True)
-
     output_path = test_output_dir / f"test_results_{args.split}.json"
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\nResults saved to {output_path}")
+
+    # ログファイルを閉じてストリームを復元
+    sys.stdout.close_log()
+    sys.stderr.close_log()
+    sys.stdout = sys.__stdout__
+    sys.stderr = sys.__stderr__
 
 
 if __name__ == "__main__":
