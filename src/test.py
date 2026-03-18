@@ -24,93 +24,10 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-
-from config import DataConfig, ModelConfig, TrainConfig, load_config
+from config import DataConfig, TrainConfig, load_config
 from dataset import StatcastDataset, load_parquet_files, load_stats
-from models import create_model
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-
-class TeeStream:
-    """stdout/stderr を端末とファイルの両方に書き込むストリーム.
-
-    tqdm 等の \r による上書き更新はファイル側ではバッファリングし、
-    最終状態のみを書き込むことでログの肥大化を防ぐ。
-    """
-
-    def __init__(self, file, stream):
-        self.file = file
-        self.stream = stream
-        self._line_buf = ""
-        self._closed = False
-
-    def write(self, data):
-        self.stream.write(data)
-        if self._closed:
-            return
-        # ファイル側: \r を考慮してバッファリング
-        self._line_buf += data
-        while "\n" in self._line_buf:
-            line, self._line_buf = self._line_buf.split("\n", 1)
-            # \r がある場合は最後の \r 以降だけ残す（上書き表現）
-            if "\r" in line:
-                line = line.rsplit("\r", 1)[-1]
-            self.file.write(line + "\n")
-            self.file.flush()
-        # バッファ中に \r があれば先頭まで巻き戻す
-        if "\r" in self._line_buf:
-            self._line_buf = self._line_buf.rsplit("\r", 1)[-1]
-
-    def flush(self):
-        self.stream.flush()
-        if not self._closed:
-            self.file.flush()
-
-    def close_log(self):
-        """残バッファをフラッシュしてファイルを閉じる."""
-        if self._closed:
-            return
-        if self._line_buf.strip():
-            if "\r" in self._line_buf:
-                self._line_buf = self._line_buf.rsplit("\r", 1)[-1]
-            self.file.write(self._line_buf + "\n")
-        self._line_buf = ""
-        self.file.flush()
-        self.file.close()
-        self._closed = True
-
-    def isatty(self):
-        return self.stream.isatty()
-
-
-def load_trained_model(
-    model_path: Path,
-    model_config_path: Path,
-    data_cfg: DataConfig,
-    stats: dict,
-    device: torch.device,
-) -> nn.Module:
-    """保存済みの重みとモデル設定からモデルを復元する."""
-    with open(model_config_path) as f:
-        saved = json.load(f)
-
-    architecture = saved.get("architecture", "atbat_dnn")
-    model_cfg = ModelConfig(
-        architecture=architecture,
-        embedding_dims={k: tuple(v) for k, v in saved["embedding_dims"].items()},
-        backbone_hidden=saved["backbone_hidden"],
-        head_hidden=saved["head_hidden"],
-        dropout=saved["dropout"],
-        num_swing_result=saved["num_swing_result"],
-        num_bb_type=saved["num_bb_type"],
-        mdn_num_components=saved.get("mdn_num_components", 5),
-    )
-    model = create_model(architecture, model_cfg, saved["num_cont"], saved["num_ord"])
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
-    model.to(device)
-    model.eval()
-    return model
+from utils.logging import tee_logging
+from utils.model_io import load_trained_model
 
 
 @torch.no_grad()
@@ -344,19 +261,11 @@ def main():
     test_output_dir = model_dir / "test" / timestamp
     test_output_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(test_output_dir / "test.log", "w") as log_file:
-        sys.stdout = TeeStream(log_file, sys.__stdout__)
-        sys.stderr = TeeStream(log_file, sys.__stderr__)
-        try:
-            _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device, log_file)
-        finally:
-            sys.stdout.close_log()
-            sys.stderr.close_log()
-            sys.stdout = sys.__stdout__
-            sys.stderr = sys.__stderr__
+    with tee_logging(test_output_dir / "test.log"):
+        _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device)
 
 
-def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device, log_file):
+def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     print(f"Device: {device}")
 
     # === Stats 読み込み ===
@@ -394,7 +303,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device, log_fil
     model_path = model_dir / args.model_file
     model_config_path = model_dir / "model_config.json"
     print(f"Loading model from {model_path}...")
-    model = load_trained_model(model_path, model_config_path, data_cfg, stats, device)
+    model = load_trained_model(model_path, model_config_path, device)
 
     # === 予測収集 ===
     preds = collect_predictions(model, test_loader, data_cfg, device)

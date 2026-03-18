@@ -18,93 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import DataConfig, ModelConfig, TrainConfig, load_config
 from dataset import (
     StatcastDataset,
-    compute_embedding_dim,
     compute_normalization_stats,
-    get_num_classes,
     load_parquet_files,
     load_stats,
 )
-from models import create_model
-
-
-class TeeStream:
-    """stdout/stderr を端末とファイルの両方に書き込むストリーム.
-
-    tqdm 等の \r による上書き更新はファイル側ではバッファリングし、
-    最終状態のみを書き込むことでログの肥大化を防ぐ。
-    """
-
-    def __init__(self, file, stream):
-        self.file = file
-        self.stream = stream
-        self._line_buf = ""
-        self._closed = False
-
-    def write(self, data):
-        self.stream.write(data)
-        if self._closed:
-            return
-        # ファイル側: \r を考慮してバッファリング
-        self._line_buf += data
-        while "\n" in self._line_buf:
-            line, self._line_buf = self._line_buf.split("\n", 1)
-            # \r がある場合は最後の \r 以降だけ残す（上書き表現）
-            if "\r" in line:
-                line = line.rsplit("\r", 1)[-1]
-            self.file.write(line + "\n")
-            self.file.flush()
-        # バッファ中に \r があれば先頭まで巻き戻す
-        if "\r" in self._line_buf:
-            self._line_buf = self._line_buf.rsplit("\r", 1)[-1]
-
-    def flush(self):
-        self.stream.flush()
-        if not self._closed:
-            self.file.flush()
-
-    def close_log(self):
-        """残バッファをフラッシュしてファイルを閉じる."""
-        if self._closed:
-            return
-        if self._line_buf.strip():
-            if "\r" in self._line_buf:
-                self._line_buf = self._line_buf.rsplit("\r", 1)[-1]
-            self.file.write(self._line_buf + "\n")
-        self._line_buf = ""
-        self.file.flush()
-        self.file.close()
-        self._closed = True
-
-    def isatty(self):
-        return self.stream.isatty()
-
-
-def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> nn.Module:
-    """»stats 情報から embedding_dims を設定してモデルを構築する."""
-    num_classes = get_num_classes(stats)
-
-    # 入力カテゴリカル特徴量のカーディナリティ
-    cat_cardinality = {
-        "p_throws": num_classes.get("p_throws", 2),
-        "pitch_type": num_classes.get("pitch_type", 18),
-        "batter": num_classes.get("batter", 783),
-        "stand": num_classes.get("stand", 2),
-        "base_out_state": 24,
-        "count_state": 12,
-    }
-
-    model_cfg.embedding_dims = {
-        feat: (cat_cardinality[feat], compute_embedding_dim(cat_cardinality[feat]))
-        for feat in data_cfg.categorical_features
-    }
-
-    model_cfg.num_swing_result = num_classes.get("swing_result", 9)
-    model_cfg.num_bb_type = num_classes.get("bb_type", 4)
-
-    num_cont = len(data_cfg.continuous_features)
-    num_ord = len(data_cfg.ordinal_features)
-
-    return create_model(model_cfg.architecture, model_cfg, num_cont, num_ord)
+from utils.logging import tee_logging
+from utils.model_io import build_model, save_model_config
 
 
 def _mdn_loss(
@@ -267,19 +186,11 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ログを端末とファイルの両方に出力
-    with open(output_dir / "train.log", "w") as log_file:
-        sys.stdout = TeeStream(log_file, sys.__stdout__)
-        sys.stderr = TeeStream(log_file, sys.__stderr__)
-        try:
-            _train(data_cfg, model_cfg, train_cfg, output_dir, log_file)
-        finally:
-            sys.stdout.close_log()
-            sys.stderr.close_log()
-            sys.stdout = sys.__stdout__
-            sys.stderr = sys.__stderr__
+    with tee_logging(output_dir / "train.log"):
+        _train(data_cfg, model_cfg, train_cfg, output_dir)
 
 
-def _train(data_cfg, model_cfg, train_cfg, output_dir, log_file):
+def _train(data_cfg, model_cfg, train_cfg, output_dir):
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
@@ -340,20 +251,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir, log_file):
     print(f"  Total params: {total_params:,}  Trainable: {trainable_params:,}")
 
     # モデル設定を保存
-    model_info = {
-        "architecture": model_cfg.architecture,
-        "embedding_dims": model_cfg.embedding_dims,
-        "backbone_hidden": model_cfg.backbone_hidden,
-        "head_hidden": model_cfg.head_hidden,
-        "dropout": model_cfg.dropout,
-        "num_swing_result": model_cfg.num_swing_result,
-        "num_bb_type": model_cfg.num_bb_type,
-        "mdn_num_components": model_cfg.mdn_num_components,
-        "num_cont": len(data_cfg.continuous_features),
-        "num_ord": len(data_cfg.ordinal_features),
-    }
-    with open(output_dir / "model_config.json", "w") as f:
-        json.dump(model_info, f, indent=2)
+    save_model_config(model_cfg, data_cfg, output_dir)
 
     # === 学習 ===
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay)
