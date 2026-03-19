@@ -2,6 +2,77 @@
 
 データセットの読み込み・前処理パッケージ。
 
+## データソース
+
+`/workspace/datasets/statcast-customized/` に配置された Statcast データを使用します。
+
+| ディレクトリ | 内容 |
+|---|---|
+| `data/` | 年月別の Parquet ファイル（例: `statcast_2024_04.parquet`） |
+| `stats/` | カテゴリカル特徴量のラベル対応テーブル（CSV） |
+| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV） |
+
+データ分割は `split/` ディレクトリの `at_bat_id` により行われます。各 Parquet ファイルに含まれる `at_bat_id` カラムと以下の CSV ファイルを照合して分割します。
+
+| ファイル | 用途 |
+|---|---|
+| `split/train_at_bat_ids.csv` | 学習データ |
+| `split/valid_at_bat_ids.csv` | 検証データ |
+| `split/test_at_bat_ids.csv` | テストデータ |
+
+---
+
+## 入力特徴量
+
+モデルへの入力は以下の3種に分類されます。
+
+| 種別 | 特徴量 |
+|---|---|
+| カテゴリカル | p_throws, pitch_type, batter, stand, base_out_state, count_state |
+| 連続値 | release_speed, release_spin_rate, pfx_x, pfx_z, plate_x, plate_z, vx0, vy0, vz0, ax, ay, az, sz_top, sz_bot, plate_z_norm |
+| 順序値 | inning_clipped, is_inning_top, diff_score_clipped, pitch_number_clipped |
+
+連続値特徴量には投球軌道パラメータ（vx0, vy0, vz0, ax, ay, az）、ストライクゾーン上下端（sz_top, sz_bot）、およびゾーン正規化済み縦位置（plate_z_norm）を含みます。
+
+---
+
+## 前処理パイプライン
+
+前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。中間データは `/workspace/datasets/statcast-customized-tmp/` に保存し、最終結果を `/workspace/datasets/statcast-customized/` にコピーして運用します。
+
+| ステップ | ノートブック | 内容 |
+|---|---|---|
+| 01 | `00_prepare_dataset_01.ipynb` | 打席数 ≥ 2000 の打者を抽出 |
+| 02 | `01_prepare_dataset_02.ipynb` | 必要カラムの選択 |
+| 03 | `02_prepare_dataset_03.ipynb` | 特徴量エンジニアリング（カウント状態・走者アウト状態の統合等） |
+| 04 | `03_prepare_dataset_04.ipynb` | スイング関連カラムの整備 |
+| 05 | `04_prepare_dataset_05.ipynb` | 投球軌道特徴量（vx0〜az, sz_top, sz_bot）の追加 |
+| 06 | `06_consolidate_swing_result.ipynb` | swing_result を 9 クラスから 3 クラスに統合 |
+| 07 | `07_normalize_plate_z.ipynb` | plate_z をストライクゾーンで正規化し plate_z_norm を追加 |
+
+### plate_z ゾーン正規化
+
+plate_z（投球の縦方向ホームプレート通過位置）を打者ごとのストライクゾーンで正規化した `plate_z_norm` を使用しています。
+
+$$
+\text{plate\_z\_norm} = \frac{\text{plate\_z} - \text{sz\_bot}}{\text{sz\_top} - \text{sz\_bot}}
+$$
+
+- `0` = ストライクゾーン下端、`1` = ストライクゾーン上端
+- 0〜1 の範囲外はボールゾーン
+
+### swing_result クラス統合
+
+元の 9 クラスを以下の 3 クラスに統合しています。
+
+| 統合後 | 元クラス |
+|---|---|
+| **foul** | foul, foul_bunt, foul_tip, foul_pitchout |
+| **hit_into_play** | hit_into_play, hit_into_play_score, hit_into_play_no_out, bunt_foul_tip |
+| **miss** | swinging_strike, swinging_strike_blocked, missed_bunt, swinging_pitchout |
+
+---
+
 ## ファイル構成
 
 | ファイル | 内容 |
@@ -42,7 +113,9 @@
 ├─────────────────────────────────────────────────┤
 │ 連続値特徴量 (float32, z-score 正規化)             │
 │   release_speed, release_spin_rate,             │
-│   pfx_x, pfx_z, plate_x, plate_z                │
+│   pfx_x, pfx_z, plate_x, plate_z,              │
+│   vx0, vy0, vz0, ax, ay, az,                   │
+│   sz_top, sz_bot, plate_z_norm                  │
 ├─────────────────────────────────────────────────┤
 │ 順序特徴量 (float32)                              │
 │   inning_clipped, is_inning_top,                │
