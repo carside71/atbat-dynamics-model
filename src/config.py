@@ -78,6 +78,9 @@ class ModelConfig:
     # MDN パラメータ（atbat_dnn_mdn 等で使用）
     mdn_num_components: int = 5
 
+    # カスケードヘッド設定（atbat_resdnn_cascade 等で使用）
+    detach_cascade: bool = True  # True: 下流勾配を上流に逆流させない
+
 
 @dataclass
 class TrainConfig:

@@ -42,4 +42,4 @@ def create_model(name: str, cfg: ModelConfig, num_cont: int, num_ord: int) -> nn
 # モデルモジュールのインポート（登録を実行するため）
 # 新しいモデルを追加したらここに import を追加する
 # ---------------------------------------------------------------------------
-from models import atbat_dnn, atbat_dnn_mdn, atbat_resdnn  # noqa: E402, F401
+from models import atbat_dnn, atbat_dnn_mdn, atbat_resdnn, atbat_resdnn_cascade  # noqa: E402, F401

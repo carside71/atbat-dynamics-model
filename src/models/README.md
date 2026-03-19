@@ -73,5 +73,7 @@ model:
 
 | 名前 | ファイル | 説明 |
 |------|----------|------|
-| `atbat_dnn` | `atbat_dnn.py` | 共有バックボーン + 4 ヘッドの MLP |
+| `atbat_dnn` | `atbat_dnn.py` | 共有バックボーン + 4 ヘッドの MLP (ReLU + BatchNorm) |
 | `atbat_dnn_mdn` | `atbat_dnn_mdn.py` | 分類ヘッドは同一、回帰ヘッドを MDN (Mixture Density Network) に置換 |
+| `atbat_resdnn` | `atbat_resdnn.py` | 残差接続 + GELU + LayerNorm でバックボーンを強化 |
+| `atbat_resdnn_cascade` | `atbat_resdnn_cascade.py` | 上記 + カスケードヘッド（上流ヘッドの出力を下流に伝達、`detach_cascade` で勾配制御） |
