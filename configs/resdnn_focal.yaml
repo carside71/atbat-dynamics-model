@@ -29,6 +29,7 @@ data:
     - az
     - sz_top
     - sz_bot
+    - plate_z_norm
   ordinal_features:
     - inning_clipped
     - is_inning_top
@@ -64,3 +65,4 @@ train:
 
   focal_gamma: 2.0
   use_class_weight: false
+  label_smoothing: 0.1

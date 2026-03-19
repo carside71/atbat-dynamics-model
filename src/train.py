@@ -62,14 +62,14 @@ def _build_loss_functions(
     device: torch.device,
 ) -> tuple[nn.Module | None, nn.Module | None]:
     """swing_result / bb_type 用の損失関数を構築する."""
-    if train_cfg.focal_gamma == 0.0 and not train_cfg.use_class_weight:
+    if train_cfg.focal_gamma == 0.0 and not train_cfg.use_class_weight and train_cfg.label_smoothing == 0.0:
         return None, None  # 標準 cross-entropy を使用
 
     sr_weight = _build_class_weights(stats, "swing_result", device) if train_cfg.use_class_weight else None
     bt_weight = _build_class_weights(stats, "bb_type", device) if train_cfg.use_class_weight else None
 
-    loss_fn_sr = FocalLoss(gamma=train_cfg.focal_gamma, weight=sr_weight)
-    loss_fn_bt = FocalLoss(gamma=train_cfg.focal_gamma, weight=bt_weight)
+    loss_fn_sr = FocalLoss(gamma=train_cfg.focal_gamma, weight=sr_weight, label_smoothing=train_cfg.label_smoothing)
+    loss_fn_bt = FocalLoss(gamma=train_cfg.focal_gamma, weight=bt_weight, label_smoothing=train_cfg.label_smoothing)
     return loss_fn_sr, loss_fn_bt
 
 
@@ -236,6 +236,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     loss_fn_sr, loss_fn_bt = _build_loss_functions(train_cfg, stats, device)
     if loss_fn_sr is not None:
         print(f"  Using FocalLoss (gamma={train_cfg.focal_gamma}, class_weight={train_cfg.use_class_weight})")
+    if train_cfg.label_smoothing > 0:
+        print(f"  Label Smoothing: {train_cfg.label_smoothing}")
     print(
         f"  Loss weights: SA={train_cfg.loss_weight_swing_attempt}, SR={train_cfg.loss_weight_swing_result}, "
         f"BT={train_cfg.loss_weight_bb_type}, Reg={train_cfg.loss_weight_regression}"

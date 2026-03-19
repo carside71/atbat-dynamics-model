@@ -113,10 +113,10 @@ docker build -t atbat-dynamics-model-image:latest .
 | 種別 | 特徴量 |
 |---|---|
 | カテゴリカル | p_throws, pitch_type, batter, stand, base_out_state, count_state |
-| 連続値 | release_speed, release_spin_rate, pfx_x, pfx_z, plate_x, plate_z, vx0, vy0, vz0, ax, ay, az, sz_top, sz_bot |
+| 連続値 | release_speed, release_spin_rate, pfx_x, pfx_z, plate_x, plate_z, vx0, vy0, vz0, ax, ay, az, sz_top, sz_bot, plate_z_norm |
 | 順序値 | inning_clipped, is_inning_top, diff_score_clipped, pitch_number_clipped |
 
-連続値特徴量には投球軌道パラメータ（vx0, vy0, vz0, ax, ay, az）とストライクゾーン上下端（sz_top, sz_bot）を含みます。
+連続値特徴量には投球軌道パラメータ（vx0, vy0, vz0, ax, ay, az）、ストライクゾーン上下端（sz_top, sz_bot）、およびゾーン正規化済み縦位置（plate_z_norm）を含みます。
 
 ### 前処理パイプライン
 
@@ -130,6 +130,18 @@ docker build -t atbat-dynamics-model-image:latest .
 | 04 | `04_preprocess_04_swing_columns.ipynb` | スイング関連カラムの整備 |
 | 05 | `05_add_trajectory_features.ipynb` | 投球軌道特徴量（vx0〜az, sz_top, sz_bot）の追加 |
 | 06 | `06_consolidate_swing_result.ipynb` | swing_result を 9 クラスから 3 クラス（foul / hit_into_play / miss）に統合 |
+| 07 | `07_normalize_plate_z.ipynb` | plate_z をストライクゾーン（sz_top, sz_bot）で正規化し plate_z_norm を追加 |
+
+### plate_z ゾーン正規化
+
+plate_z（投球の縦方向ホームプレート通過位置）を打者ごとのストライクゾーンで正規化した `plate_z_norm` を使用しています。
+
+$$
+\text{plate\_z\_norm} = \frac{\text{plate\_z} - \text{sz\_bot}}{\text{sz\_top} - \text{sz\_bot}}
+$$
+
+- `0` = ストライクゾーン下端、`1` = ストライクゾーン上端
+- 0〜1 の範囲外はボールゾーン
 
 ### swing_result クラス統合
 
@@ -165,6 +177,7 @@ train:
   device: cuda
   focal_gamma: 0.0       # > 0 で Focal Loss 有効
   use_class_weight: false # true でクラス頻度の逆数重み付け
+  label_smoothing: 0.0   # > 0 で Label Smoothing 有効（0.1 程度が一般的）
 ```
 
 設定可能な全フィールドは `configs/` 内の各 YAML ファイルを参照してください。

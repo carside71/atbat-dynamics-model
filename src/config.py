@@ -41,6 +41,7 @@ class DataConfig:
             "az",
             "sz_top",
             "sz_bot",
+            "plate_z_norm",
         ]
     )
     ordinal_features: list[str] = field(
@@ -116,6 +117,9 @@ class TrainConfig:
     # Focal Loss 設定
     focal_gamma: float = 0.0  # 0.0 で通常の cross-entropy と同等
     use_class_weight: bool = False  # クラス頻度の逆数で重み付け
+
+    # Label Smoothing
+    label_smoothing: float = 0.0  # 0.0 で無効、0.1 程度が一般的
 
 
 def _apply_overrides(obj: Any, overrides: dict) -> None:

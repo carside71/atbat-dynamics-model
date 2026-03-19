@@ -29,6 +29,7 @@ data:
     - az
     - sz_top
     - sz_bot
+    - plate_z_norm
   ordinal_features:
     - inning_clipped
     - is_inning_top
@@ -66,3 +67,4 @@ train:
   loss_weight_swing_result: 1.0
   loss_weight_bb_type: 1.0
   loss_weight_regression: 0.01
+  label_smoothing: 0.1

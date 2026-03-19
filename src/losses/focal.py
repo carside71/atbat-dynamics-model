@@ -25,10 +25,12 @@ class FocalLoss(nn.Module):
         gamma: float = 2.0,
         weight: torch.Tensor | None = None,
         reduction: str = "mean",
+        label_smoothing: float = 0.0,
     ):
         super().__init__()
         self.gamma = gamma
         self.reduction = reduction
+        self.label_smoothing = label_smoothing
         self.register_buffer("weight", weight)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -38,7 +40,9 @@ class FocalLoss(nn.Module):
             logits: (N, C) 未正規化ロジット
             targets: (N,) クラスインデックス
         """
-        ce_loss = F.cross_entropy(logits, targets, weight=self.weight, reduction="none")
+        ce_loss = F.cross_entropy(
+            logits, targets, weight=self.weight, reduction="none", label_smoothing=self.label_smoothing
+        )
         pt = torch.exp(-ce_loss)  # 正解クラスの予測確率
         focal_loss = (1.0 - pt) ** self.gamma * ce_loss
 
