@@ -53,6 +53,9 @@ class DataConfig:
         ]
     )
 
+    # 打者履歴
+    batter_history_dir: Path = Path("/workspace/datasets/statcast-customized/batter_history")
+
     # ターゲット
     target_cls_swing_attempt: str = "swing_attempt"
     target_cls_swing_result: str = "swing_result"
@@ -96,6 +99,12 @@ class ModelConfig:
     seq_hidden_dim: int = 64
     seq_num_layers: int = 1
     seq_bidirectional: bool = False
+
+    # 打者履歴エンコーダ設定
+    batter_hist_max_atbats: int = 0  # 0: 打者履歴なし, >0: 直近N打席の履歴を使用
+    batter_hist_max_pitches: int = 10  # 各打席あたりの最大投球数
+    batter_hist_hidden_dim: int = 64
+    batter_hist_num_layers: int = 1
 
 
 @dataclass

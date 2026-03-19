@@ -57,6 +57,10 @@ def save_model_config(model_cfg: ModelConfig, data_cfg: DataConfig, output_dir: 
         "seq_hidden_dim": model_cfg.seq_hidden_dim,
         "seq_num_layers": model_cfg.seq_num_layers,
         "seq_bidirectional": model_cfg.seq_bidirectional,
+        "batter_hist_max_atbats": model_cfg.batter_hist_max_atbats,
+        "batter_hist_max_pitches": model_cfg.batter_hist_max_pitches,
+        "batter_hist_hidden_dim": model_cfg.batter_hist_hidden_dim,
+        "batter_hist_num_layers": model_cfg.batter_hist_num_layers,
     }
     with open(output_dir / "model_config.json", "w") as f:
         json.dump(model_info, f, indent=2)

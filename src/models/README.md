@@ -12,6 +12,7 @@
 | `atbat_resdnn` | `atbat_resdnn.py` | 残差接続 + GELU + LayerNorm でバックボーンを強化 |
 | `atbat_resdnn_cascade` | `atbat_resdnn_cascade.py` | 上記 + カスケードヘッド（上流ヘッドの出力を下流に伝達） |
 | `atbat_seq_resdnn` | `atbat_seq_resdnn.py` | 打席内系列エンコーダ (GRU/Transformer) + ResBlock バックボーン |
+| `atbat_seq_resdnn_batter_hist` | `atbat_seq_resdnn_batter_hist.py` | 上記 + 階層 GRU 打者履歴エンコーダ |
 
 ---
 
@@ -271,6 +272,107 @@ model:
 
 ---
 
+## 6. atbat_seq_resdnn_batter_hist
+
+**打者履歴エンコーダ付き系列 ResBlock DNN。** 過去50打席分の Statcast 生投球データを階層 GRU でエンコードし、打者の傾向をモデルに伝える。
+
+```
+═══════════════════════════════════════════════════════════════════════
+  (A) 打者履歴エンコーダ       (B) 打席内系列エンコーダ      (C) 現在の投球
+═══════════════════════════════════════════════════════════════════════
+
+  過去 N 打席 × 最大 P 球      同一打席の過去 T 球        cat / cont / ord
+  ─────────────────────      ────────────────        ──────────────
+
+  hist_pitch_type (N,P)      seq_pitch_type (T,)     pitch_type, stand,
+  hist_cont (N,P,15)         seq_cont (T,15)         batter, p_throws,
+  hist_swing_attempt (N,P)   seq_swing_attempt (T,)  base_out_state, ...
+         │                   seq_swing_result (T,)   release_speed, ...
+         │                          │                       │
+         ▼                          ▼                       ▼
+  ┌─────────────┐            ┌─────────────┐         ┌───────────┐
+  │  Inner GRU  │            │ GRU /       │         │ Embedding │
+  │  (B*N,P,D)  │            │ Transformer │         │  concat   │
+  └──────┬──────┘            └──────┬──────┘         └─────┬─────┘
+         │ h_n[-1]                  │                      │
+         ▼                          │                      │
+  ┌─────────────────┐               │                      │
+  │ + bb_type_emb   │               │                      │
+  │ + launch_speed  │               │                      │
+  │ + launch_angle  │               │                      │
+  └────────┬────────┘               │                      │
+           │ (B, N, D_ab)           │                      │
+           ▼                        │                      │
+  ┌─────────────┐                   │                      │
+  │  Outer GRU  │                   │                      │
+  │  (B,N,D_ab) │                   │                      │
+  └──────┬──────┘                   │                      │
+         │ h_n[-1]                  │                      │
+         ▼                          ▼                      ▼
+    batter_hist_emb            seq_embedding         pitch_embedding
+         │                          │                      │
+         └──────────────────────────┴──────────────────────┘
+                                    │
+                                 concat
+                                    │
+                                    ▼
+                             Input Projection
+                                    │
+                              ResBlock × L
+                                    │
+                       ┌──────┬─────┴─────┬──────┐
+                       ▼      ▼           ▼      ▼
+                      SA     SR          BT    Reg
+```
+
+### 階層 GRU アーキテクチャ
+
+#### Inner GRU（投球レベル）
+
+各過去打席内の投球系列（最大 P 球）をエンコード。現在の投球系列エンコーダと `pitch_type` 埋め込みを共有。
+
+```
+hist_pitch_type (B*N, P)    ──→ Embedding (shared) ─┐
+hist_cont (B*N, P, 15)     ─────────────────────────┼─→ concat ─→ GRU ─→ h_n[-1]
+hist_swing_attempt (B*N, P) ────────────────────────┘              (B*N, D_inner)
+```
+
+#### 打席単位特徴量の結合
+
+Inner GRU の出力に、打席結果情報（`hist_bb_type` の埋め込み、`hist_launch_speed`、`hist_launch_angle`）を concat。
+
+```
+[inner_gru_out, bb_type_emb, launch_speed, launch_angle]  ─→ (B, N, D_atbat_vec)
+```
+
+#### Outer GRU（打席レベル）
+
+N 打席分の打席ベクトル系列をエンコード。`hist_atbat_mask` で有効な打席のみを処理。
+
+```
+atbat_vecs (B, N, D_atbat_vec) ─→ GRU ─→ h_n[-1] ─→ batter_hist_emb (B, batter_hist_out_dim)
+```
+
+### 設定
+
+```yaml
+data:
+  batter_history_dir: /workspace/datasets/statcast-customized/batter_history
+
+model:
+  architecture: atbat_seq_resdnn_batter_hist
+  batter_hist_max_atbats: 50      # 過去打席数
+  batter_hist_max_pitches: 10     # 各打席の最大投球数
+  batter_hist_hidden_dim: 64      # Inner/Outer GRU 隠れ層次元
+  batter_hist_num_layers: 1       # GRU 層数
+```
+
+- **設定例**: `configs/seq_resdnn_batter_hist.yaml`
+- **必要なデータ**: `batter_history_dir` に `batter_game_history.parquet` と `atbat_row_indices.parquet` が必要（`scripts/add_game_info_and_rebuild.py` で生成）
+- **データ分割**: 時系列分割が必須（将来のデータが履歴に混入するリークを防止）
+
+---
+
 ## モデルの追加方法
 
 ### 1. モデルファイルを作成
@@ -338,3 +440,4 @@ model:
 | `forward` 戻り値 | `dict` with keys: `swing_attempt`, `swing_result`, `bb_type`, `regression` |
 | 登録名 | `@register_model("名前")` で一意な名前を付ける |
 | 系列モデル | クラス属性 `is_seq_model = True` を定義 |
+| 打者履歴モデル | クラス属性 `is_batter_hist_model = True` を定義 |

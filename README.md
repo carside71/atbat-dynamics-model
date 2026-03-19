@@ -39,7 +39,8 @@ atbat-dynamics-model/
 │   ├── resdnn.yaml
 │   ├── resdnn_cascade.yaml
 │   ├── resdnn_focal.yaml
-│   └── seq_resdnn.yaml
+│   ├── seq_resdnn.yaml
+│   └── seq_resdnn_batter_hist.yaml
 ├── src/
 │   ├── config.py                # 設定定義 & YAML 読み込み
 │   ├── train.py                 # 学習スクリプト
@@ -48,7 +49,8 @@ atbat-dynamics-model/
 │   │   ├── README.md
 │   │   ├── loaders.py           #   データ読み込みユーティリティ
 │   │   ├── statcast.py          #   StatcastDataset（単一投球）
-│   │   └── statcast_sequence.py #   StatcastSequenceDataset（系列対応）
+│   │   ├── statcast_sequence.py #   StatcastSequenceDataset（系列対応）
+│   │   └── statcast_batter_hist.py # StatcastBatterHistDataset（打者履歴対応）
 │   ├── losses/                  # 損失関数
 │   │   ├── focal.py             #   Focal Loss
 │   │   └── multi_task.py        #   マルチタスク損失 & MDN 損失
@@ -58,7 +60,8 @@ atbat-dynamics-model/
 │   │   ├── atbat_dnn_mdn.py     #   DNN + MDN 回帰ヘッド
 │   │   ├── atbat_resdnn.py      #   残差接続 + GELU
 │   │   ├── atbat_resdnn_cascade.py  # カスケードヘッド付き
-│   │   └── atbat_seq_resdnn.py  #   系列エンコーダ + ResBlock
+│   │   ├── atbat_seq_resdnn.py  #   系列エンコーダ + ResBlock
+│   │   └── atbat_seq_resdnn_batter_hist.py # 打者履歴エンコーダ付き
 │   └── utils/
 │       ├── logging.py           # ログ出力
 │       └── model_io.py          # モデル構築・保存・復元
@@ -67,6 +70,7 @@ atbat-dynamics-model/
 │   ├── 01_analysis/             #   データ分析
 │   └── locals/                  #   ローカル実行用スクリプト
 ├── scripts/
+│   ├── add_game_info_and_rebuild.py  # game_pk/game_date 付与 & 時系列分割 & 打者履歴構築
 │   ├── run_container_mac.sh     # Mac 用コンテナ起動
 │   └── run_container_wsl.sh     # WSL 用コンテナ起動
 ├── Dockerfile
@@ -184,9 +188,12 @@ python3 src/test.py --model-dir /path/to/model --model-file best_model.pt
 |---|---|
 | `data/` | 年月別の Parquet ファイル（例: `statcast_2024_04.parquet`） |
 | `stats/` | カテゴリカル特徴量のラベル対応テーブル（CSV） |
-| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV） |
+| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV）※時系列分割 |
+| `batter_history/` | 打者履歴ルックアップテーブル（Parquet） |
 
-前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。
+データ分割は **時系列分割**（`game_date` ベース）で行われます。学習データは 2024-06-30 以前、検証データは 2024-07-01〜2024-10-30、テストデータは 2025-03-15 以降です。ダブルヘッダーを正しく区別するため `game_pk`（試合ごとに一意な ID）を使用します。
+
+前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。打者履歴テーブルの構築は `scripts/add_game_info_and_rebuild.py` で行います。
 
 データセットクラスや読み込みユーティリティの詳細は [src/datasets/README.md](src/datasets/README.md) を参照してください。
 
@@ -201,6 +208,7 @@ python3 src/test.py --model-dir /path/to/model --model-file best_model.pt
 | `atbat_resdnn` | `resdnn.yaml` | 残差接続 + GELU + LayerNorm |
 | `atbat_resdnn_cascade` | `resdnn_cascade.yaml` | 上記 + カスケードヘッド（ヘッド間情報伝達） |
 | `atbat_seq_resdnn` | `seq_resdnn.yaml` | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
+| `atbat_seq_resdnn_batter_hist` | `seq_resdnn_batter_hist.yaml` | 上記 + 階層 GRU 打者履歴エンコーダ |
 
 各モデルのアーキテクチャ詳細・図解・追加方法は [src/models/README.md](src/models/README.md) を参照してください。
 
