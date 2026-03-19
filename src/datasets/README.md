@@ -34,26 +34,26 @@
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              StatcastDataset[i]                  │
+│              StatcastDataset[i]                 │
 ├─────────────────────────────────────────────────┤
-│ カテゴリカル特徴量 (int64)                        │
+│ カテゴリカル特徴量 (int64)                         │
 │   p_throws, pitch_type, batter, stand,          │
 │   base_out_state, count_state                   │
 ├─────────────────────────────────────────────────┤
-│ 連続値特徴量 (float32, z-score 正規化)            │
+│ 連続値特徴量 (float32, z-score 正規化)             │
 │   release_speed, release_spin_rate,             │
-│   pfx_x, pfx_z, plate_x, plate_z               │
+│   pfx_x, pfx_z, plate_x, plate_z                │
 ├─────────────────────────────────────────────────┤
-│ 順序特徴量 (float32)                             │
+│ 順序特徴量 (float32)                              │
 │   inning_clipped, is_inning_top,                │
 │   diff_score_clipped, pitch_number_clipped      │
 ├─────────────────────────────────────────────────┤
-│ ターゲット                                       │
+│ ターゲット                                        │
 │   swing_attempt (0/1), swing_result (0-8 / -1), │
 │   bb_type (0-3 / -1),                           │
 │   reg_targets (launch_speed, launch_angle,      │
-│                hit_distance_sc)                  │
-│   reg_mask (各回帰ターゲットの有効フラグ)           │
+│                hit_distance_sc)                 │
+│   reg_mask (各回帰ターゲットの有効フラグ)            │
 └─────────────────────────────────────────────────┘
 ```
 

@@ -24,10 +24,10 @@
  ├─ カテゴリカル特徴量 ──→ [Embedding] ─┐
  ├─ 連続値特徴量 ──────────────────────┤──→ concat ──→ [Backbone] ──→ h
  └─ 順序特徴量 ────────────────────────┘                              │
-                                                                      ├─→ swing_attempt  (B,)    logits
-                                                                      ├─→ swing_result   (B, 9)  logits
-                                                                      ├─→ bb_type        (B, 4)  logits
-                                                                      └─→ regression     (B, 3)  values
+                                                                    ├─→ swing_attempt  (B,)    logits
+                                                                    ├─→ swing_result   (B, 9)  logits
+                                                                    ├─→ bb_type        (B, 4)  logits
+                                                                    └─→ regression     (B, 3)  values
 ```
 
 ### 出力（全モデル共通）
@@ -107,17 +107,17 @@ Embedding concat ──→ Input Projection (Linear → LN → GELU)
       │
       ▼
 ┌─────────────────────────────────────────────┐
-│              ResBlock / ProjectedResBlock    │
+│              ResBlock / ProjectedResBlock   │
 │  ┌─────────┐                                │
-│  │  Input h │──────────────────┐ (skip)      │
-│  └────┬────┘                   │             │
-│       ▼                        │             │
-│  Linear → LN → GELU → Dropout │             │
-│       ▼                        │             │
-│  Linear → LN                   │             │
-│       ▼                        ▼             │
-│     h_out  ──────────────→  (+) ──→ GELU     │
-│                                              │
+│  │ Input h │───────────────────┐ (skip)     │
+│  └────┬────┘                   │            │
+│       ▼                        │            │
+│  Linear → LN → GELU → Dropout  │            │
+│       ▼                        │            │
+│  Linear → LN                   │            │
+│       ▼                        ▼            │
+│     h_out  ────────────────→  (+) ──→ GELU  │
+│                                             │
 │  ※ ProjectedResBlock: skip 側にも Linear→LN  │
 └─────────────────────────────────────────────┘
       │  × backbone_num_layers
@@ -143,8 +143,8 @@ Embedding concat ──→ Input Projection (Linear → LN → GELU)
 
 ```
 Embedding concat ──→ Input Projection ──→ ResBlock × N ──→ h
-                                                              │
-          ┌───────────────────────────────────────────────────┘
+                                                           │
+          ┌────────────────────────────────────────────────┘
           │
           ▼
     ┌────────────┐
@@ -187,28 +187,33 @@ Embedding concat ──→ Input Projection ──→ ResBlock × N ──→ h
 **打席内系列エンコーダ付き ResBlock DNN。** 同一打席の過去投球情報を活用。
 
 ```
-過去投球系列 (T 球分)                         現在の投球
-─────────────────────                      ─────────────────
-seq_pitch_type ──→ [Embed]  ─┐
-seq_swing_result ──→ [Embed] ┤
-seq_cont ────────────────────┤──→ concat (T, D_seq)
-seq_swing_attempt ───────────┘         │
-                                       ▼
-                              ┌────────────────┐
-                              │  系列エンコーダ  │
-                              │  GRU or         │
-                              │  Transformer    │
-                              └───────┬────────┘
-                                      │ seq_embedding (D_seq_out)
-                                      │
-           Embedding concat ──────────┤──→ concat ──→ Projection
-                                                          │
-                                                          ▼
-                                                    ResBlock × N
-                                                          │
-                                         ┌────┬─────┬────┘
-                                         ▼    ▼     ▼    ▼
-                                        SA   SR    BT   Reg
+過去投球系列 (T 球分)                       現在の投球
+─────────────────────                    ─────────────────
+seq_pitch_type ──→ [Embed] ─┐            cat ──→ [Embed] ─┐
+seq_swing_result → [Embed] ─┤            cont ────────────┤
+seq_cont ───────────────────┤            ord ─────────────┘
+seq_swing_attempt ──────────┘                    │
+         │                                       │
+    concat (T, D_seq)                    Embedding concat
+         │                                       │
+         ▼                                       │
+┌────────────────┐                               │
+│  系列エンコーダ  │                               │
+│  GRU or        │                               │
+│  Transformer   │                               │
+└───────┬────────┘                               │
+        │                                        │
+        │ seq_embedding                          │
+        └──────────────┬─────────────────────────┘
+                       │
+                    concat ──→ Projection
+                                   │
+                                   ▼
+                             ResBlock × N
+                                   │
+                      ┌─────┬──────┼──────┐
+                      ▼     ▼      ▼      ▼
+                     SA    SR     BT    Reg
 ```
 
 ### 系列エンコーダの選択
