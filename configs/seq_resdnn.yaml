@@ -53,3 +53,8 @@ train:
   weight_decay: 1.0e-5
   num_workers: 4
   device: cuda
+
+  loss_weight_swing_attempt: 1.0
+  loss_weight_swing_result: 1.0
+  loss_weight_bb_type: 1.0
+  loss_weight_regression: 0.01

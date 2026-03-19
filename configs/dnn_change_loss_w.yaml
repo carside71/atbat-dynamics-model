@@ -1,5 +1,5 @@
-# AtBat Dynamics Model 設定ファイル (ResBlock + GELU)
-# 残差接続とGELU活性化関数による改良版
+# AtBat Dynamics Model 設定ファイル
+# 各セクション内のフィールドは省略可能（デフォルト値が使われます）
 
 data:
   data_dir: /workspace/datasets/statcast-customized/data
@@ -36,8 +36,8 @@ data:
     - hit_distance_sc
 
 model:
-  architecture: atbat_resdnn
-  backbone_hidden: [512, 512, 256, 256, 128]
+  architecture: atbat_dnn
+  backbone_hidden: [512, 256, 128]
   head_hidden: [64]
   dropout: 0.2
 
@@ -48,8 +48,9 @@ train:
   weight_decay: 1.0e-5
   num_workers: 4
   device: cuda
+  seed: 42
 
   loss_weight_swing_attempt: 1.0
-  loss_weight_swing_result: 1.0
-  loss_weight_bb_type: 1.0
-  loss_weight_regression: 0.01
+  loss_weight_swing_result: 5.0
+  loss_weight_bb_type: 5.0
+  loss_weight_regression: 0.05

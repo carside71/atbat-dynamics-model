@@ -236,6 +236,10 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     loss_fn_sr, loss_fn_bt = _build_loss_functions(train_cfg, stats, device)
     if loss_fn_sr is not None:
         print(f"  Using FocalLoss (gamma={train_cfg.focal_gamma}, class_weight={train_cfg.use_class_weight})")
+    print(
+        f"  Loss weights: SA={train_cfg.loss_weight_swing_attempt}, SR={train_cfg.loss_weight_swing_result}, "
+        f"BT={train_cfg.loss_weight_bb_type}, Reg={train_cfg.loss_weight_regression}"
+    )
 
     # === 学習 ===
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay)
@@ -265,7 +269,13 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
                 epoch_losses[k] = epoch_losses.get(k, 0.0) + v
             n_batches += 1
 
-            pbar.set_postfix(loss=f"{losses['total']:.4f}")
+            pbar.set_postfix(
+                total=f"{losses['total']:.4f}",
+                SA=f"{losses['swing_attempt']:.4f}",
+                SR=f"{losses['swing_result']:.4f}",
+                BT=f"{losses['bb_type']:.4f}",
+                Reg=f"{losses['regression']:.4f}",
+            )
 
         scheduler.step()
 
@@ -281,8 +291,12 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
         print(
             f"Epoch {epoch:3d} | "
-            f"Train Loss: {avg_train['total']:.4f} | "
-            f"Val Loss: {val_metrics['total']:.4f} | "
+            f"Train Loss: {avg_train['total']:.4f} "
+            f"(SA={avg_train['swing_attempt']:.4f} SR={avg_train['swing_result']:.4f} "
+            f"BT={avg_train['bb_type']:.4f} Reg={avg_train['regression']:.4f}) | "
+            f"Val Loss: {val_metrics['total']:.4f} "
+            f"(SA={val_metrics['swing_attempt']:.4f} SR={val_metrics['swing_result']:.4f} "
+            f"BT={val_metrics['bb_type']:.4f} Reg={val_metrics['regression']:.4f}) | "
             f"Val SA Acc: {val_metrics['acc_swing_attempt']:.4f} | "
             f"Val SR Acc: {val_metrics['acc_swing_result']:.4f} | "
             f"Val BT Acc: {val_metrics['acc_bb_type']:.4f}"
