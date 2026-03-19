@@ -84,7 +84,7 @@ class AtBatDNN(nn.Module):
             x = cat_dict[feat_name]
             num_classes = self.cfg.embedding_dims[feat_name][0]
             # 不正値(-1やrange外)をpadding_idxにマッピング
-            x = x.clamp(min=0, max=num_classes)
+            x = torch.where((x < 0) | (x >= num_classes), num_classes, x)
             embeds.append(self.embeddings[feat_name](x))
 
         # Concatenate all input features
