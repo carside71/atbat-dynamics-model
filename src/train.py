@@ -17,8 +17,9 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, ModelConfig, TrainConfig, load_config
-from dataset import (
+from datasets import (
     StatcastDataset,
+    StatcastSequenceDataset,
     compute_normalization_stats,
     load_all_parquet_files,
     load_split_at_bat_ids,
@@ -34,6 +35,25 @@ def _build_class_weights(stats: dict[str, pd.DataFrame], key: str, device: torch
     counts = stats[key]["count"].to_numpy(dtype=np.float64)
     weights = counts.sum() / (len(counts) * counts)
     return torch.tensor(weights, dtype=torch.float32, device=device)
+
+
+def _model_forward(
+    model: nn.Module, batch: dict[str, torch.Tensor], data_cfg: DataConfig, use_seq: bool
+) -> dict[str, torch.Tensor]:
+    """モデルの forward を呼び出す（シーケンス対応）."""
+    cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
+    if use_seq:
+        return model(
+            cat_dict,
+            batch["cont"],
+            batch["ord"],
+            seq_pitch_type=batch["seq_pitch_type"],
+            seq_cont=batch["seq_cont"],
+            seq_swing_attempt=batch["seq_swing_attempt"],
+            seq_swing_result=batch["seq_swing_result"],
+            seq_mask=batch["seq_mask"],
+        )
+    return model(cat_dict, batch["cont"], batch["ord"])
 
 
 def _build_loss_functions(
@@ -62,6 +82,7 @@ def evaluate(
     device: torch.device,
     loss_fn_sr: nn.Module | None = None,
     loss_fn_bt: nn.Module | None = None,
+    use_seq: bool = False,
 ) -> dict[str, float]:
     """検証データで評価を行い、損失とメトリクスを返す."""
     model.eval()
@@ -75,8 +96,7 @@ def evaluate(
 
     for batch in loader:
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
-        outputs = model(cat_dict, batch["cont"], batch["ord"])
+        outputs = _model_forward(model, batch, data_cfg, use_seq)
 
         _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
         for k, v in losses.items():
@@ -151,8 +171,15 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     print("Splitting by at_bat_id...")
     train_ids = load_split_at_bat_ids(data_cfg.split_dir, "train")
     val_ids = load_split_at_bat_ids(data_cfg.split_dir, "val")
-    train_df = all_df[all_df["at_bat_id"].isin(train_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
-    val_df = all_df[all_df["at_bat_id"].isin(val_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
+
+    use_seq = model_cfg.max_seq_len > 0
+
+    if use_seq:
+        train_df = all_df[all_df["at_bat_id"].isin(train_ids)].reset_index(drop=True)
+        val_df = all_df[all_df["at_bat_id"].isin(val_ids)].reset_index(drop=True)
+    else:
+        train_df = all_df[all_df["at_bat_id"].isin(train_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
+        val_df = all_df[all_df["at_bat_id"].isin(val_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
     del all_df
     print(f"  Train samples: {len(train_df):,}")
     print(f"  Val samples: {len(val_df):,}")
@@ -169,8 +196,12 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
     # === Dataset & DataLoader ===
     print("Building datasets...")
-    train_ds = StatcastDataset(train_df, data_cfg, norm_stats, reg_norm_stats)
-    val_ds = StatcastDataset(val_df, data_cfg, norm_stats, reg_norm_stats)
+    if use_seq:
+        train_ds = StatcastSequenceDataset(train_df, data_cfg, model_cfg.max_seq_len, norm_stats, reg_norm_stats)
+        val_ds = StatcastSequenceDataset(val_df, data_cfg, model_cfg.max_seq_len, norm_stats, reg_norm_stats)
+    else:
+        train_ds = StatcastDataset(train_df, data_cfg, norm_stats, reg_norm_stats)
+        val_ds = StatcastDataset(val_df, data_cfg, norm_stats, reg_norm_stats)
     del train_df, val_df  # メモリ解放
 
     train_loader = DataLoader(
@@ -222,10 +253,9 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{train_cfg.num_epochs}")
         for batch in pbar:
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-            cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
 
             optimizer.zero_grad()
-            outputs = model(cat_dict, batch["cont"], batch["ord"])
+            outputs = _model_forward(model, batch, data_cfg, use_seq)
             loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -242,7 +272,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         avg_train = {k: v / max(n_batches, 1) for k, v in epoch_losses.items()}
 
         # 検証
-        val_metrics = evaluate(model, val_loader, train_cfg, data_cfg, device, loss_fn_sr, loss_fn_bt)
+        val_metrics = evaluate(model, val_loader, train_cfg, data_cfg, device, loss_fn_sr, loss_fn_bt, use_seq)
 
         record = {"epoch": epoch, "lr": scheduler.get_last_lr()[0]}
         record.update({f"train_{k}": v for k, v in avg_train.items()})

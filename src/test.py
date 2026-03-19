@@ -25,9 +25,28 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, TrainConfig, load_config
-from dataset import StatcastDataset, load_all_parquet_files, load_split_at_bat_ids, load_stats
+from datasets import StatcastDataset, StatcastSequenceDataset, load_all_parquet_files, load_split_at_bat_ids, load_stats
 from utils.logging import tee_logging
 from utils.model_io import load_trained_model
+
+
+def _model_forward(
+    model: nn.Module, batch: dict[str, torch.Tensor], data_cfg: DataConfig, use_seq: bool
+) -> dict[str, torch.Tensor]:
+    """モデルの forward を呼び出す（シーケンス対応）."""
+    cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
+    if use_seq:
+        return model(
+            cat_dict,
+            batch["cont"],
+            batch["ord"],
+            seq_pitch_type=batch["seq_pitch_type"],
+            seq_cont=batch["seq_cont"],
+            seq_swing_attempt=batch["seq_swing_attempt"],
+            seq_swing_result=batch["seq_swing_result"],
+            seq_mask=batch["seq_mask"],
+        )
+    return model(cat_dict, batch["cont"], batch["ord"])
 
 
 @torch.no_grad()
@@ -36,6 +55,7 @@ def collect_predictions(
     loader: DataLoader,
     data_cfg: DataConfig,
     device: torch.device,
+    use_seq: bool = False,
 ) -> dict[str, np.ndarray]:
     """全バッチの予測とラベルを収集する."""
     all_sa_prob, all_sa_true = [], []
@@ -45,8 +65,7 @@ def collect_predictions(
 
     for batch in tqdm(loader, desc="Predicting"):
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
-        outputs = model(cat_dict, batch["cont"], batch["ord"])
+        outputs = _model_forward(model, batch, data_cfg, use_seq)
 
         all_sa_prob.append(outputs["swing_attempt"].sigmoid().cpu().numpy())
         all_sa_true.append(batch["swing_attempt"].cpu().numpy())
@@ -282,15 +301,29 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     norm_stats = {k: tuple(v) for k, v in norm_params["input"].items()}
     reg_norm_stats = {k: tuple(v) for k, v in norm_params["target"].items()}
 
+    # === モデル設定読み込み（シーケンス判定用） ===
+    model_config_path = model_dir / "model_config.json"
+    with open(model_config_path) as f:
+        saved_model_cfg = json.load(f)
+    use_seq = saved_model_cfg.get("max_seq_len", 0) > 0
+    max_seq_len = saved_model_cfg.get("max_seq_len", 0)
+
     # === テストデータ読み込み ===
     print(f"Loading {args.split} data...")
     all_df = load_all_parquet_files(data_cfg.data_dir)
     split_ids = load_split_at_bat_ids(data_cfg.split_dir, args.split)
-    test_df = all_df[all_df["at_bat_id"].isin(split_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
+
+    if use_seq:
+        test_df = all_df[all_df["at_bat_id"].isin(split_ids)].reset_index(drop=True)
+    else:
+        test_df = all_df[all_df["at_bat_id"].isin(split_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
     del all_df
     print(f"  Samples: {len(test_df):,}")
 
-    test_ds = StatcastDataset(test_df, data_cfg, norm_stats, reg_norm_stats)
+    if use_seq:
+        test_ds = StatcastSequenceDataset(test_df, data_cfg, max_seq_len, norm_stats, reg_norm_stats)
+    else:
+        test_ds = StatcastDataset(test_df, data_cfg, norm_stats, reg_norm_stats)
     del test_df
 
     test_loader = DataLoader(
@@ -303,12 +336,11 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
 
     # === モデル読み込み ===
     model_path = model_dir / args.model_file
-    model_config_path = model_dir / "model_config.json"
     print(f"Loading model from {model_path}...")
     model = load_trained_model(model_path, model_config_path, device)
 
     # === 予測収集 ===
-    preds = collect_predictions(model, test_loader, data_cfg, device)
+    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq)
 
     # === 評価 ===
     results = {}

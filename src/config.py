@@ -81,6 +81,13 @@ class ModelConfig:
     # カスケードヘッド設定（atbat_resdnn_cascade 等で使用）
     detach_cascade: bool = True  # True: 下流勾配を上流に逆流させない
 
+    # シーケンス設定（atbat_seq_resdnn 等で使用）
+    max_seq_len: int = 0  # 0: 系列なし, >0: 過去投球系列を使用
+    seq_encoder_type: str = "gru"  # "gru" | "transformer"
+    seq_hidden_dim: int = 64
+    seq_num_layers: int = 1
+    seq_bidirectional: bool = False
+
 
 @dataclass
 class TrainConfig:
