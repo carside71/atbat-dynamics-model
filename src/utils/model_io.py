@@ -30,7 +30,7 @@ def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> nn
         for feat in data_cfg.categorical_features
     }
 
-    model_cfg.num_swing_result = num_classes.get("swing_result", 9)
+    model_cfg.num_swing_result = num_classes.get("swing_result", 3)
     model_cfg.num_bb_type = num_classes.get("bb_type", 4)
 
     num_cont = len(data_cfg.continuous_features)

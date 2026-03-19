@@ -33,6 +33,14 @@ class DataConfig:
             "pfx_z",
             "plate_x",
             "plate_z",
+            "vx0",
+            "vy0",
+            "vz0",
+            "ax",
+            "ay",
+            "az",
+            "sz_top",
+            "sz_bot",
         ]
     )
     ordinal_features: list[str] = field(
@@ -72,7 +80,7 @@ class ModelConfig:
     dropout: float = 0.2
 
     # 出力クラス数
-    num_swing_result: int = 9
+    num_swing_result: int = 3
     num_bb_type: int = 4
 
     # MDN パラメータ（atbat_dnn_mdn 等で使用）

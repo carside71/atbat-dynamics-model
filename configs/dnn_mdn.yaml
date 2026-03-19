@@ -21,6 +21,14 @@ data:
     - pfx_z
     - plate_x
     - plate_z
+    - vx0
+    - vy0
+    - vz0
+    - ax
+    - ay
+    - az
+    - sz_top
+    - sz_bot
   ordinal_features:
     - inning_clipped
     - is_inning_top
