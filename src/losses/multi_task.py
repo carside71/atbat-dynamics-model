@@ -68,7 +68,9 @@ def compute_loss(
         sr_logits = outputs["swing_result"][sr_mask]
         sr_targets = batch["swing_result"][sr_mask]
         loss_sr = (
-            loss_fn_sr(sr_logits, sr_targets) if loss_fn_sr is not None else F.cross_entropy(sr_logits, sr_targets)
+            loss_fn_sr(sr_logits, sr_targets)
+            if loss_fn_sr is not None
+            else F.cross_entropy(sr_logits, sr_targets, label_smoothing=train_cfg.label_smoothing)
         )
     else:
         loss_sr = torch.tensor(0.0, device=device)
@@ -80,7 +82,9 @@ def compute_loss(
         bt_logits = outputs["bb_type"][bt_mask]
         bt_targets = batch["bb_type"][bt_mask]
         loss_bt = (
-            loss_fn_bt(bt_logits, bt_targets) if loss_fn_bt is not None else F.cross_entropy(bt_logits, bt_targets)
+            loss_fn_bt(bt_logits, bt_targets)
+            if loss_fn_bt is not None
+            else F.cross_entropy(bt_logits, bt_targets, label_smoothing=train_cfg.label_smoothing)
         )
     else:
         loss_bt = torch.tensor(0.0, device=device)

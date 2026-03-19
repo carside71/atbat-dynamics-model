@@ -1,5 +1,5 @@
-# AtBat Dynamics Model 設定ファイル
-# 各セクション内のフィールドは省略可能（デフォルト値が使われます）
+# AtBat Dynamics Model 設定ファイル (Sequence + ResBlock + GELU)
+# 過去投球系列を GRU でエンコードし、現在の投球特徴量に結合して予測
 
 data:
   data_dir: /workspace/datasets/statcast-customized/data
@@ -45,19 +45,23 @@ data:
     - hit_distance_sc
 
 model:
-  architecture: atbat_dnn
-  backbone_hidden: [512, 256, 128]
+  architecture: atbat_seq_resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2
+  max_seq_len: 10
+  seq_encoder_type: gru
+  seq_hidden_dim: 64
+  seq_num_layers: 1
+  seq_bidirectional: false
 
 train:
-  batch_size: 4096
+  batch_size: 2048
   num_epochs: 30
   lr: 1.0e-3
   weight_decay: 1.0e-5
   num_workers: 4
   device: cuda
-  seed: 42
 
   loss_weight_swing_attempt: 1.0
   loss_weight_swing_result: 1.0

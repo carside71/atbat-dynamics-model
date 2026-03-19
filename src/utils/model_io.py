@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from config import DataConfig, ModelConfig
-from dataset import compute_embedding_dim, get_num_classes
+from datasets import compute_embedding_dim, get_num_classes
 from models import create_model
 
 
@@ -30,7 +30,7 @@ def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> nn
         for feat in data_cfg.categorical_features
     }
 
-    model_cfg.num_swing_result = num_classes.get("swing_result", 9)
+    model_cfg.num_swing_result = num_classes.get("swing_result", 3)
     model_cfg.num_bb_type = num_classes.get("bb_type", 4)
 
     num_cont = len(data_cfg.continuous_features)
@@ -52,6 +52,11 @@ def save_model_config(model_cfg: ModelConfig, data_cfg: DataConfig, output_dir: 
         "mdn_num_components": model_cfg.mdn_num_components,
         "num_cont": len(data_cfg.continuous_features),
         "num_ord": len(data_cfg.ordinal_features),
+        "max_seq_len": model_cfg.max_seq_len,
+        "seq_encoder_type": model_cfg.seq_encoder_type,
+        "seq_hidden_dim": model_cfg.seq_hidden_dim,
+        "seq_num_layers": model_cfg.seq_num_layers,
+        "seq_bidirectional": model_cfg.seq_bidirectional,
     }
     with open(output_dir / "model_config.json", "w") as f:
         json.dump(model_info, f, indent=2)
@@ -76,6 +81,11 @@ def load_trained_model(
         num_swing_result=saved["num_swing_result"],
         num_bb_type=saved["num_bb_type"],
         mdn_num_components=saved.get("mdn_num_components", 5),
+        max_seq_len=saved.get("max_seq_len", 0),
+        seq_encoder_type=saved.get("seq_encoder_type", "gru"),
+        seq_hidden_dim=saved.get("seq_hidden_dim", 64),
+        seq_num_layers=saved.get("seq_num_layers", 1),
+        seq_bidirectional=saved.get("seq_bidirectional", False),
     )
     model = create_model(architecture, model_cfg, saved["num_cont"], saved["num_ord"])
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))

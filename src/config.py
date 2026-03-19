@@ -33,6 +33,15 @@ class DataConfig:
             "pfx_z",
             "plate_x",
             "plate_z",
+            "vx0",
+            "vy0",
+            "vz0",
+            "ax",
+            "ay",
+            "az",
+            "sz_top",
+            "sz_bot",
+            "plate_z_norm",
         ]
     )
     ordinal_features: list[str] = field(
@@ -72,7 +81,7 @@ class ModelConfig:
     dropout: float = 0.2
 
     # 出力クラス数
-    num_swing_result: int = 9
+    num_swing_result: int = 3
     num_bb_type: int = 4
 
     # MDN パラメータ（atbat_dnn_mdn 等で使用）
@@ -80,6 +89,13 @@ class ModelConfig:
 
     # カスケードヘッド設定（atbat_resdnn_cascade 等で使用）
     detach_cascade: bool = True  # True: 下流勾配を上流に逆流させない
+
+    # シーケンス設定（atbat_seq_resdnn 等で使用）
+    max_seq_len: int = 0  # 0: 系列なし, >0: 過去投球系列を使用
+    seq_encoder_type: str = "gru"  # "gru" | "transformer"
+    seq_hidden_dim: int = 64
+    seq_num_layers: int = 1
+    seq_bidirectional: bool = False
 
 
 @dataclass
@@ -101,6 +117,9 @@ class TrainConfig:
     # Focal Loss 設定
     focal_gamma: float = 0.0  # 0.0 で通常の cross-entropy と同等
     use_class_weight: bool = False  # クラス頻度の逆数で重み付け
+
+    # Label Smoothing
+    label_smoothing: float = 0.0  # 0.0 で無効、0.1 程度が一般的
 
 
 def _apply_overrides(obj: Any, overrides: dict) -> None:

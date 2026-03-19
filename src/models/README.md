@@ -1,11 +1,277 @@
-# モデルの追加方法
+# src/models/
 
-## 概要
-
-このディレクトリにはモデルアーキテクチャの実装を配置します。
+モデルアーキテクチャの実装を配置するパッケージ。
 レジストリパターンにより、新しいモデルを追加するだけで学習・評価パイプラインから利用できます。
 
-## 手順
+## 登録済みモデル一覧
+
+| 名前 | ファイル | 説明 |
+|------|----------|------|
+| `atbat_dnn` | `atbat_dnn.py` | 共有バックボーン + 4 ヘッドの MLP (ReLU + BatchNorm) |
+| `atbat_dnn_mdn` | `atbat_dnn_mdn.py` | 分類ヘッドは同一、回帰ヘッドを MDN (Mixture Density Network) に置換 |
+| `atbat_resdnn` | `atbat_resdnn.py` | 残差接続 + GELU + LayerNorm でバックボーンを強化 |
+| `atbat_resdnn_cascade` | `atbat_resdnn_cascade.py` | 上記 + カスケードヘッド（上流ヘッドの出力を下流に伝達） |
+| `atbat_seq_resdnn` | `atbat_seq_resdnn.py` | 打席内系列エンコーダ (GRU/Transformer) + ResBlock バックボーン |
+
+---
+
+## 共通構造
+
+すべてのモデルは **埋め込み → バックボーン → マルチヘッド** の3段構成です。
+
+```
+入力
+ ├─ カテゴリカル特徴量 ──→ [Embedding] ─┐
+ ├─ 連続値特徴量 ──────────────────────┤──→ concat ──→ [Backbone] ──→ h
+ └─ 順序特徴量 ────────────────────────┘                              │
+                                                                    ├─→ swing_attempt  (B,)    logits
+                                                                    ├─→ swing_result   (B, 9)  logits
+                                                                    ├─→ bb_type        (B, 4)  logits
+                                                                    └─→ regression     (B, 3)  values
+```
+
+### 出力（全モデル共通）
+
+| キー | 形状 | 内容 |
+|---|---|---|
+| `swing_attempt` | `(B,)` | スイング試行 logit (binary) |
+| `swing_result` | `(B, 9)` | スイング結果 logits (9 クラス) |
+| `bb_type` | `(B, 4)` | 打球タイプ logits (4 クラス) |
+| `regression` | `(B, 3)` | launch_speed, launch_angle, hit_distance_sc |
+
+---
+
+## 1. atbat_dnn
+
+**シンプルな全結合ネットワーク。** ベースラインモデル。
+
+```
+Embedding concat
+      │
+      ▼
+┌────────────────────┐
+│ Linear(in, 256)    │
+│ BatchNorm1d        │
+│ ReLU               │╮
+│ Dropout            ││ × backbone_num_layers (default 3)
+└────────────────────┘│
+      │ ◄─────────────╯
+      ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+│ SA Head  │ │ SR Head  │ │ BT Head  │ │ Reg Head │
+│ Lin→1    │ │ Lin→9    │ │ Lin→4    │ │ Lin→3    │
+└──────────┘ └──────────┘ └──────────┘ └──────────┘
+```
+
+- **バックボーン**: `Linear → BatchNorm1d → ReLU → Dropout` を `backbone_num_layers` 回スタック
+- **ヘッド**: 各出力タスクに独立した `Linear` レイヤー
+- **設定例**: `configs/dnn.yaml`
+
+---
+
+## 2. atbat_dnn_mdn
+
+**DNN + 混合密度ネットワーク (MDN)。** 回帰ヘッドのみ MDN に置き換え。
+
+```
+Embedding concat
+      │
+      ▼
+┌────────────────────┐
+│ Linear → BN → ReLU │ × backbone_num_layers
+│ → Dropout          │
+└────────────────────┘
+      │
+      ├─→ SA Head  (Linear → 1)
+      ├─→ SR Head  (Linear → 9)
+      ├─→ BT Head  (Linear → 4)
+      │
+      └─→ MDN Head
+           ├─→ π (mixing coefficients)  : Linear → K → Softmax
+           ├─→ μ (means)                : Linear → K × 3
+           └─→ σ (std deviations)       : Linear → K × 3 → ELU+1+ε
+```
+
+- **MDN ヘッド**: K 個のガウス分布の混合で回帰ターゲットをモデル化
+- **推論時**: 最大重み成分の μ を予測値として採用
+- **設定例**: `configs/dnn_mdn.yaml`（`mdn_num_components` で K を指定）
+
+---
+
+## 3. atbat_resdnn
+
+**残差接続付き DNN。** ResBlock と ProjectedResBlock で勾配流を安定化。
+
+```
+Embedding concat ──→ Input Projection (Linear → LN → GELU)
+      │
+      ▼
+┌─────────────────────────────────────────────┐
+│              ResBlock / ProjectedResBlock   │
+│  ┌─────────┐                                │
+│  │ Input h │───────────────────┐ (skip)     │
+│  └────┬────┘                   │            │
+│       ▼                        │            │
+│  Linear → LN → GELU → Dropout  │            │
+│       ▼                        │            │
+│  Linear → LN                   │            │
+│       ▼                        ▼            │
+│     h_out  ────────────────→  (+) ──→ GELU  │
+│                                             │
+│  ※ ProjectedResBlock: skip 側にも Linear→LN  │
+└─────────────────────────────────────────────┘
+      │  × backbone_num_layers
+      ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
+│ SA Head  │ │ SR Head  │ │ BT Head  │ │ Reg Head │
+│Lin→GELU  │ │Lin→GELU  │ │Lin→GELU  │ │Lin→GELU  │
+│→Lin→1    │ │→Lin→9    │ │→Lin→4    │ │→Lin→3    │
+└──────────┘ └──────────┘ └──────────┘ └──────────┘
+```
+
+- **入力投影**: 埋め込み結合後の次元を `backbone_hidden` に統一
+- **ResBlock**: 次元が同一の場合。`Linear→LN→GELU→Dropout→Linear→LN + skip → GELU`
+- **ProjectedResBlock**: 次元が異なる場合。skip 接続に射影 `Linear→LN` を挿入
+- **ヘッド**: 2 層 MLP (`Linear→GELU→Linear`)
+- **設定例**: `configs/resdnn.yaml`
+
+---
+
+## 4. atbat_resdnn_cascade
+
+**カスケードヘッド付き ResBlock DNN。** ヘッド間に因果的依存関係を導入。
+
+```
+Embedding concat ──→ Input Projection ──→ ResBlock × N ──→ h
+                                                           │
+          ┌────────────────────────────────────────────────┘
+          │
+          ▼
+    ┌────────────┐
+    │  SA Head   │──→ swing_attempt logit (sa)
+    │ Lin→GELU   │
+    │ →Lin→1     │
+    └─────┬──────┘
+          │ concat [h, sa]
+          ▼
+    ┌────────────┐
+    │  SR Head   │──→ swing_result logits (sr)
+    │ Lin→GELU   │
+    │ →Lin→9     │
+    └─────┬──────┘
+          │ concat [h, sr]
+          ▼
+    ┌────────────┐
+    │  BT Head   │──→ bb_type logits (bt)
+    │ Lin→GELU   │
+    │ →Lin→4     │
+    └─────┬──────┘
+          │ concat [h, bt]
+          ▼
+    ┌────────────┐
+    │  Reg Head  │──→ regression (3)
+    │ Lin→GELU   │
+    │ →Lin→3     │
+    └────────────┘
+```
+
+- **カスケードの流れ**: `h → SA → [h,sa] → SR → [h,sr] → BT → [h,bt] → Reg`
+- **`detach_cascade`**: `True` にすると上流ヘッドからの勾配を `detach` し、下流ヘッド学習時に上流を更新しない
+- **設計意図**: スイング試行 → スイング結果 → 打球タイプ → 回帰値 という野球の因果構造を反映
+- **設定例**: `configs/resdnn_cascade.yaml`（`detach_cascade: true` / `resdnn_focal.yaml`）
+
+---
+
+## 5. atbat_seq_resdnn
+
+**打席内系列エンコーダ付き ResBlock DNN。** 同一打席の過去投球情報を活用。
+
+```
+過去投球系列 (T 球分)                       現在の投球
+─────────────────────                    ─────────────────
+seq_pitch_type ──→ [Embed] ─┐            cat ──→ [Embed] ─┐
+seq_swing_result → [Embed] ─┤            cont ────────────┤
+seq_cont ───────────────────┤            ord ─────────────┘
+seq_swing_attempt ──────────┘                    │
+         │                                       │
+    concat (T, D_seq)                    Embedding concat
+         │                                       │
+         ▼                                       │
+┌────────────────┐                               │
+│  系列エンコーダ  │                               │
+│  GRU or        │                               │
+│  Transformer   │                               │
+└───────┬────────┘                               │
+        │                                        │
+        │ seq_embedding                          │
+        └──────────────┬─────────────────────────┘
+                       │
+                    concat ──→ Projection
+                                   │
+                                   ▼
+                             ResBlock × N
+                                   │
+                      ┌─────┬──────┼──────┐
+                      ▼     ▼      ▼      ▼
+                     SA    SR     BT    Reg
+```
+
+### 系列エンコーダの選択
+
+#### GRU エンコーダ (`seq_encoder_type: gru`)
+
+```
+input (B, T, D_seq)  ──→ pack_padded_sequence (seq_mask で実長算出)
+                              │
+                              ▼
+                         nn.GRU
+                         (hidden_size = seq_hidden_dim)
+                         (num_layers = seq_num_layers)
+                         (bidirectional = seq_bidirectional)
+                              │
+                              ▼
+                         h_n[-1] or cat(h_n[-2:])  ──→ seq_embedding
+```
+
+- 可変長系列に `pack_padded_sequence` で対応
+- 双方向時は最終隠れ状態の forward/backward を concat
+- **過去投球がない場合**（打席1球目）: ゼロベクトルを返却
+
+#### Transformer エンコーダ (`seq_encoder_type: transformer`)
+
+```
+input (B, T, D_seq)  ──→ Linear(D_seq → seq_hidden_dim)
+                              │
+                              ▼
+                    TransformerEncoderLayer × seq_num_layers
+                    (nhead=4, dim_feedforward=seq_hidden_dim×4)
+                    (src_key_padding_mask = ~seq_mask)
+                              │
+                              ▼
+                    masked mean pooling ──→ seq_embedding
+```
+
+- `src_key_padding_mask` でパディング位置をマスク
+- 出力をマスク付き平均プーリングで固定長ベクトル化
+- **過去投球がない場合**: ゼロベクトルを返却
+
+### 設定
+
+```yaml
+model:
+  architecture: atbat_seq_resdnn
+  max_seq_len: 10              # 過去投球の最大系列長
+  seq_encoder_type: gru        # "gru" or "transformer"
+  seq_hidden_dim: 64           # エンコーダ隠れ層次元
+  seq_num_layers: 1            # エンコーダ層数
+  seq_bidirectional: false     # GRU のみ: 双方向フラグ
+```
+
+- **設定例**: `configs/seq_resdnn.yaml`
+
+---
+
+## モデルの追加方法
 
 ### 1. モデルファイルを作成
 
@@ -43,6 +309,9 @@ class MyModel(nn.Module):
         }
 ```
 
+> 系列モデルの場合は `forward` に `**kwargs` で系列テンソルを受け取り、
+> クラス属性 `is_seq_model = True` を定義します。
+
 ### 2. `__init__.py` にインポートを追加
 
 `src/models/__init__.py` 末尾のインポートブロックにモジュールを追加します。
@@ -65,15 +334,7 @@ model:
 | 項目 | 要件 |
 |------|------|
 | コンストラクタ引数 | `(cfg: ModelConfig, num_cont: int, num_ord: int)` |
-| `forward` 引数 | `(cat_dict, cont, ord_feat)` |
+| `forward` 引数 | `(cat_dict, cont, ord_feat)` ※系列モデルは `**kwargs` 追加 |
 | `forward` 戻り値 | `dict` with keys: `swing_attempt`, `swing_result`, `bb_type`, `regression` |
 | 登録名 | `@register_model("名前")` で一意な名前を付ける |
-
-## 登録済みモデル一覧
-
-| 名前 | ファイル | 説明 |
-|------|----------|------|
-| `atbat_dnn` | `atbat_dnn.py` | 共有バックボーン + 4 ヘッドの MLP (ReLU + BatchNorm) |
-| `atbat_dnn_mdn` | `atbat_dnn_mdn.py` | 分類ヘッドは同一、回帰ヘッドを MDN (Mixture Density Network) に置換 |
-| `atbat_resdnn` | `atbat_resdnn.py` | 残差接続 + GELU + LayerNorm でバックボーンを強化 |
-| `atbat_resdnn_cascade` | `atbat_resdnn_cascade.py` | 上記 + カスケードヘッド（上流ヘッドの出力を下流に伝達、`detach_cascade` で勾配制御） |
+| 系列モデル | クラス属性 `is_seq_model = True` を定義 |
