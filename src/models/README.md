@@ -274,84 +274,191 @@ model:
 
 ## 6. atbat_seq_resdnn_batter_hist
 
-**打者履歴エンコーダ付き系列 ResBlock DNN。** 過去50打席分の Statcast 生投球データを階層 GRU でエンコードし、打者の傾向をモデルに伝える。
+**打者履歴エンコーダ付き系列 ResBlock DNN。** `atbat_seq_resdnn` を拡張し、打者の直近 N 打席（デフォルト50打席）の Statcast 全投球データを階層 GRU でエンコードして予測に利用する。「この打者は最近どのような投球にどう反応してきたか」という傾向をモデルに伝えることが目的。
+
+### 全体構造
+
+モデルは 3 つの独立したエンコーダの出力を結合して予測する。
 
 ```
-═══════════════════════════════════════════════════════════════════════
-  (A) 打者履歴エンコーダ       (B) 打席内系列エンコーダ      (C) 現在の投球
-═══════════════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════════════════════════════
+  (A) 打者履歴エンコーダ          (B) 打席内系列エンコーダ      (C) 現在の投球
+═══════════════════════════════════════════════════════════════════════════════════
 
-  過去 N 打席 × 最大 P 球      同一打席の過去 T 球        cat / cont / ord
-  ─────────────────────      ────────────────        ──────────────
+  過去 N 打席 × 各最大 P 球      同一打席の過去 T 球         カテゴリカル / 連続値 / 順序
+  ──────────────────────       ────────────────         ─────────────────────
 
-  hist_pitch_type (N,P)      seq_pitch_type (T,)     pitch_type, stand,
-  hist_cont (N,P,15)         seq_cont (T,15)         batter, p_throws,
-  hist_swing_attempt (N,P)   seq_swing_attempt (T,)  base_out_state, ...
-         │                   seq_swing_result (T,)   release_speed, ...
-         │                          │                       │
-         ▼                          ▼                       ▼
-  ┌─────────────┐            ┌─────────────┐         ┌───────────┐
-  │  Inner GRU  │            │ GRU /       │         │ Embedding │
-  │  (B*N,P,D)  │            │ Transformer │         │  concat   │
-  └──────┬──────┘            └──────┬──────┘         └─────┬─────┘
-         │ h_n[-1]                  │                      │
-         ▼                          │                      │
-  ┌─────────────────┐               │                      │
-  │ + bb_type_emb   │               │                      │
-  │ + launch_speed  │               │                      │
-  │ + launch_angle  │               │                      │
-  └────────┬────────┘               │                      │
-           │ (B, N, D_ab)           │                      │
-           ▼                        │                      │
-  ┌─────────────┐                   │                      │
-  │  Outer GRU  │                   │                      │
-  │  (B,N,D_ab) │                   │                      │
-  └──────┬──────┘                   │                      │
-         │ h_n[-1]                  │                      │
-         ▼                          ▼                      ▼
-    batter_hist_emb            seq_embedding         pitch_embedding
-         │                          │                      │
-         └──────────────────────────┴──────────────────────┘
-                                    │
-                                 concat
-                                    │
-                                    ▼
-                             Input Projection
-                                    │
-                              ResBlock × L
-                                    │
-                       ┌──────┬─────┴─────┬──────┐
-                       ▼      ▼           ▼      ▼
-                      SA     SR          BT    Reg
+  [投球レベル: 各球ごと]         seq_pitch_type (T,)      pitch_type, stand,
+  hist_pitch_type (N,P)        seq_cont (T,15)          batter, p_throws,
+  hist_cont (N,P,15)           seq_swing_attempt (T,)   base_out_state, ...
+  hist_swing_attempt (N,P)     seq_swing_result (T,)    release_speed, ...
+  hist_swing_result (N,P)             │                        │
+         │                            ▼                        ▼
+         ▼                     ┌─────────────┐          ┌───────────┐
+  ┌─────────────┐              │ GRU /       │          │ Embedding │
+  │  Inner GRU  │              │ Transformer │          │  concat   │
+  │  (B*N,P,D)  │              └──────┬──────┘          └─────┬─────┘
+  └──────┬──────┘                     │                       │
+         │ h_n[-1]                    │                       │
+         ▼                            │                       │
+  [打席レベル: 各打席ごと]               │                       │
+  + bb_type_emb (打球種別)             │                       │
+  + launch_speed (打球速度)            │                       │
+  + launch_angle (打球角度)            │                       │
+         │                            │                       │
+         │ (B, N, D_ab)               │                       │
+         ▼                            │                       │
+  ┌─────────────┐                     │                       │
+  │  Outer GRU  │                     │                       │
+  │  (B,N,D_ab) │                     │                       │
+  └──────┬──────┘                     │                       │
+         │ h_n[-1]                    │                       │
+         ▼                            ▼                       ▼
+    batter_hist_emb              seq_embedding          pitch_embedding
+         │                            │                       │
+         └────────────────────────────┴───────────────────────┘
+                                      │
+                                   concat
+                                      │
+                                      ▼
+                               ProjectedResBlock
+                                      │
+                                ResBlock × L
+                                      │
+                         ┌──────┬─────┴─────┬──────┐
+                         ▼      ▼           ▼      ▼
+                        SA     SR          BT    Reg
 ```
 
-### 階層 GRU アーキテクチャ
+### 入力データの詳細
 
-#### Inner GRU（投球レベル）
+#### (A) 打者履歴エンコーダへの入力
 
-各過去打席内の投球系列（最大 P 球）をエンコード。現在の投球系列エンコーダと `pitch_type` 埋め込みを共有。
+打者の **当該試合より前** の直近 N 打席（デフォルト50打席）の全投球データ。同一 `(batter, game_pk)` の全サンプルは同じ履歴を共有する。データは `batter_game_history.parquet` から事前構築される。
+
+##### 投球レベル特徴量（Inner GRU 入力）— 各打席の各球ごと
+
+| テンソル | 形状 | 内容 |
+|----------|------|------|
+| `hist_pitch_type` | `(B, N, P)` | 球種 ID → Embedding (打席内系列エンコーダと **共有**) |
+| `hist_cont` | `(B, N, P, 15)` | 15 次元の連続値特徴量（正規化済み、下表参照） |
+| `hist_swing_attempt` | `(B, N, P)` | スイング試行フラグ (0/1) |
+| `hist_swing_result` | `(B, N, P)` | スイング結果 ID → Embedding (打席内系列エンコーダと **共有**) |
+
+`hist_cont` に含まれる 15 特徴量:
+
+| 特徴量 | 説明 | カテゴリ |
+|--------|------|---------|
+| `release_speed` | 球速 (mph) | 球速 |
+| `release_spin_rate` | 回転数 (rpm) | 回転 |
+| `pfx_x` | 水平変化量 (ft) | 軌道・変化 |
+| `pfx_z` | 垂直変化量 (ft) | 軌道・変化 |
+| `vx0` | リリース時 X 方向速度 | 軌道・変化 |
+| `vy0` | リリース時 Y 方向速度 | 軌道・変化 |
+| `vz0` | リリース時 Z 方向速度 | 軌道・変化 |
+| `ax` | X 方向加速度 | 軌道・変化 |
+| `ay` | Y 方向加速度 | 軌道・変化 |
+| `az` | Z 方向加速度 | 軌道・変化 |
+| `plate_x` | プレート通過時の水平位置 (ft) | 通過位置 |
+| `plate_z` | プレート通過時の垂直位置 (ft) | 通過位置 |
+| `sz_top` | ストライクゾーン上端 (ft) | ゾーン |
+| `sz_bot` | ストライクゾーン下端 (ft) | ゾーン |
+| `plate_z_norm` | ゾーン正規化済み垂直通過位置 | 通過位置 |
+
+Inner GRU への実際の入力ベクトル（1 投球あたり）:
 
 ```
-hist_pitch_type (B*N, P)    ──→ Embedding (shared) ─┐
-hist_cont (B*N, P, 15)     ─────────────────────────┼─→ concat ─→ GRU ─→ h_n[-1]
-hist_swing_attempt (B*N, P) ────────────────────────┘              (B*N, D_inner)
+[pitch_type_emb(D_pt), cont(15), swing_attempt(1), swing_result_emb(4)]
+ → 合計: D_pt + 15 + 1 + 4 = D_pt + 20 次元
 ```
 
-#### 打席単位特徴量の結合
+##### 打席レベル特徴量（Inner→Outer 間で結合）— 各打席の最終結果
 
-Inner GRU の出力に、打席結果情報（`hist_bb_type` の埋め込み、`hist_launch_speed`、`hist_launch_angle`）を concat。
+| テンソル | 形状 | 内容 |
+|----------|------|------|
+| `hist_bb_type` | `(B, N)` | 打球種別 ID (ground_ball / line_drive / fly_ball / popup) → Embedding (dim=4) |
+| `hist_launch_speed` | `(B, N)` | 打球速度 (正規化済み、打球なしの場合は 0) |
+| `hist_launch_angle` | `(B, N)` | 打球角度 (正規化済み、打球なしの場合は 0) |
+
+これらは **投球単位ではなく打席単位** の情報であり、Inner GRU が投球列を処理した **後** に打席ベクトルへ結合される。
+
+#### (B) 打席内系列エンコーダへの入力
+
+現在の打席における **今の投球より前** の投球列（最大 T=10 球）。`atbat_seq_resdnn` と同一。
+
+| テンソル | 形状 | 内容 |
+|----------|------|------|
+| `seq_pitch_type` | `(B, T)` | 球種 ID → Embedding |
+| `seq_cont` | `(B, T, 15)` | 連続値 15 次元 (上記と同一) |
+| `seq_swing_attempt` | `(B, T)` | スイング試行フラグ |
+| `seq_swing_result` | `(B, T)` | スイング結果 ID → Embedding |
+| `seq_mask` | `(B, T)` | 有効投球マスク |
+
+#### (C) 現在の投球の特徴量
+
+予測対象である現在の 1 球の特徴量。
+
+| 種別 | 特徴量 |
+|------|--------|
+| カテゴリカル (Embedding) | `pitch_type`, `p_throws`, `batter`, `stand`, `base_out_state`, `count_state` |
+| 連続値 | 上記 15 特徴量と同一 |
+| 順序値 | `inning_clipped`, `is_inning_top`, `diff_score_clipped`, `pitch_number_clipped` |
+
+### 階層 GRU アーキテクチャの詳細
+
+#### Inner GRU（投球レベル → 打席ベクトル）
+
+各過去打席内の投球系列（最大 P 球）を 1 本の打席ベクトルに圧縮する。B×N 打席分を `(B*N, P, D)` に reshape してバッチ処理。`pitch_type` / `swing_result` の Embedding は打席内系列エンコーダと **重みを共有** する。
 
 ```
-[inner_gru_out, bb_type_emb, launch_speed, launch_angle]  ─→ (B, N, D_atbat_vec)
+hist_pitch_type (B*N, P)     ─→ Embedding (shared) ──┐
+hist_cont (B*N, P, 15)      ─────────────────────────┤
+hist_swing_attempt (B*N, P) ─────────────────────────┼─→ concat ─→ GRU(1層) ─→ h_n[-1]
+hist_swing_result (B*N, P)  ─→ Embedding (shared) ───┘                        (B*N, D_inner)
 ```
 
-#### Outer GRU（打席レベル）
+- `pack_padded_sequence` で可変長に対応（`hist_pitch_mask` から実長を算出）
+- 投球がない打席はゼロベクトル
 
-N 打席分の打席ベクトル系列をエンコード。`hist_atbat_mask` で有効な打席のみを処理。
+#### Inner→Outer 間の打席ベクトル構成
+
+Inner GRU 出力に **打席の最終結果** を結合して完全な打席ベクトルを作る。`bb_type` / `launch_speed` / `launch_angle` は投球単位ではなく打席単位の情報であるため、ここで注入する。
 
 ```
-atbat_vecs (B, N, D_atbat_vec) ─→ GRU ─→ h_n[-1] ─→ batter_hist_emb (B, batter_hist_out_dim)
+inner_gru_out (D_inner)  ──┐
+bb_type_emb (4)         ───┼─→ concat ─→ atbat_vec (B, N, D_inner + 4 + 2)
+launch_speed (1)        ───┤
+launch_angle (1)        ───┘
 ```
+
+**設計意図**: 投球経過（球筋・スイング反応の時系列）と打席最終結果（打球の質）を分離してエンコードすることで、「どんな投球列を経て、どんな結果になったか」を構造的に表現する。
+
+#### Outer GRU（打席ベクトル列 → 打者履歴ベクトル）
+
+N 打席分の打席ベクトル列を時系列として処理し、打者の傾向を固定長ベクトルに圧縮する。
+
+```
+atbat_vecs (B, N, D_atbat_vec) ─→ pack_padded_sequence
+                                       │
+                                       ▼
+                                  GRU(num_layers層)
+                                       │
+                                       ▼
+                                  h_n[-1] ─→ batter_hist_emb (B, D_hist_out)
+```
+
+- `hist_atbat_mask` で有効な打席のみを処理
+- 履歴がない打者はゼロベクトル
+
+### Embedding 共有の構造
+
+| Embedding 層 | 打席内系列エンコーダ (B) | 打者履歴 Inner GRU (A) | 備考 |
+|---|---|---|---|
+| `seq_pitch_type_embed` | ✅ 使用 | ✅ 使用 | **共有**: 同一の重みで球種を埋め込む |
+| `seq_swing_result_embed` | ✅ 使用 | ✅ 使用 | **共有**: 同一の重みでスイング結果を埋め込む |
+| `hist_bb_type_embed` | — | ✅ 使用 | **専用**: 打者履歴の打席レベルでのみ使用 |
+
+`pitch_type` と `swing_result` の Embedding を共有することで、パラメータ数を抑えつつ、同一の球種・スイング結果に対して一貫した表現を学習する。
 
 ### 設定
 
@@ -361,15 +468,28 @@ data:
 
 model:
   architecture: atbat_seq_resdnn_batter_hist
-  batter_hist_max_atbats: 50      # 過去打席数
-  batter_hist_max_pitches: 10     # 各打席の最大投球数
-  batter_hist_hidden_dim: 64      # Inner/Outer GRU 隠れ層次元
-  batter_hist_num_layers: 1       # GRU 層数
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+
+  # 打席内系列エンコーダ
+  max_seq_len: 10              # 同一打席内の過去投球の最大系列長
+  seq_encoder_type: gru        # "gru" or "transformer"
+  seq_hidden_dim: 64           # エンコーダ隠れ層次元
+  seq_num_layers: 1            # エンコーダ層数
+  seq_bidirectional: false     # GRU のみ: 双方向フラグ
+
+  # 打者履歴エンコーダ
+  batter_hist_max_atbats: 50   # 遡る過去打席数 (N)
+  batter_hist_max_pitches: 10  # 各打席の最大投球数 (P)
+  batter_hist_hidden_dim: 64   # Inner/Outer GRU 隠れ層次元
+  batter_hist_num_layers: 1    # Outer GRU 層数 (Inner は常に 1 層)
 ```
 
 - **設定例**: `configs/seq_resdnn_batter_hist.yaml`
 - **必要なデータ**: `batter_history_dir` に `batter_game_history.parquet` と `atbat_row_indices.parquet` が必要（`scripts/add_game_info_and_rebuild.py` で生成）
 - **データ分割**: 時系列分割が必須（将来のデータが履歴に混入するリークを防止）
+- **データリーク防止**: 打者履歴は「当該試合より前」の打席のみを含む。同一試合内の打席は含まれない
 
 ---
 
