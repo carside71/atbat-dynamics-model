@@ -111,55 +111,92 @@ class StatcastBatterHistDataset(Dataset):
         self.reg_targets = torch.from_numpy(np.column_stack(reg_arrays))
         self.reg_mask = torch.from_numpy(np.column_stack(reg_mask_arrays))
 
-        # === 打者履歴のセットアップ ===
+        # === パディング用ダミー行の追加（打者履歴の無効エントリ参照用） ===
+        self._n_real_samples = len(df)
+        self._dummy_idx = self._n_real_samples
+        self.cat_features["pitch_type"] = torch.cat([self.cat_features["pitch_type"], torch.zeros(1, dtype=torch.long)])
+        self.cont_features = torch.cat([self.cont_features, torch.zeros(1, self.num_cont)])
+        self.swing_attempt = torch.cat([self.swing_attempt, torch.zeros(1)])
+        self.swing_result = torch.cat([self.swing_result, torch.full((1,), -1, dtype=torch.long)])
+        self.bb_type = torch.cat([self.bb_type, torch.full((1,), -1, dtype=torch.long)])
+        self.reg_targets = torch.cat([self.reg_targets, torch.zeros(1, self.reg_targets.shape[1])])
+
+        # === 打者履歴のセットアップ（インデックスを事前計算） ===
         self._setup_batter_history(df, batter_history_dir)
 
     def _setup_batter_history(self, df: pd.DataFrame, batter_history_dir: Path | None) -> None:
-        """打者履歴テーブルをロードし、高速ルックアップ用のインデックスを構築する."""
+        """打者履歴のルックアップインデックスを事前計算する.
+
+        __getitem__ での Python for ループと辞書検索を排除するため、
+        ユニークな (batter, game_pk) ペアごとに行インデックスを事前計算する。
+        """
         if batter_history_dir is None:
             batter_history_dir = self.cfg.batter_history_dir
 
-        # (batter, game_pk) → 直近50打席の at_bat_id リスト
-        hist_df = pd.read_parquet(batter_history_dir / "batter_game_history.parquet")
+        N = self.batter_hist_max_atbats
+        P = self.batter_hist_max_pitches
+        dummy_idx = self._dummy_idx
 
-        # # at_bat_id → 行インデックスのマッピング (このDatasetのdf内でのインデックス)
-        # # まず全データの at_bat_id → グローバル行インデックスをロード
-        # global_idx_df = pd.read_parquet(batter_history_dir / "atbat_row_indices.parquet")
-
-        # # このDatasetに含まれる at_bat_id のセットを取得
-        # at_bat_ids_in_df = set(df["at_bat_id"].unique())
-
-        # グローバル行インデックスから、このdf内の at_bat_id に対応するものだけ使う
-        # ただし行インデックスはこのdfのローカルインデックスではなく
-        # 全データの行インデックスなので、dfのat_bat_id→ローカル行インデックスを再構築
-        self.atbat_to_local_rows: dict[int, np.ndarray] = {}
+        # at_bat_id → ローカル行インデックス（ローカル変数で十分）
+        atbat_to_local_rows: dict[int, np.ndarray] = {}
         at_bat_id_arr = df["at_bat_id"].to_numpy()
         current_id = at_bat_id_arr[0]
         start = 0
         for i in range(1, len(at_bat_id_arr)):
             if at_bat_id_arr[i] != current_id:
-                self.atbat_to_local_rows[int(current_id)] = np.arange(start, i)
+                atbat_to_local_rows[int(current_id)] = np.arange(start, i)
                 current_id = at_bat_id_arr[i]
                 start = i
-        self.atbat_to_local_rows[int(current_id)] = np.arange(start, len(at_bat_id_arr))
+        atbat_to_local_rows[int(current_id)] = np.arange(start, len(at_bat_id_arr))
 
         # (batter, game_pk) → hist_at_bat_ids のマッピング
-        # 履歴の at_bat_id がこのdf内に存在するもののみ有効
-        self.batter_game_to_hist: dict[tuple[int, int], list[int]] = {}
+        hist_df = pd.read_parquet(batter_history_dir / "batter_game_history.parquet")
+        batter_game_to_hist: dict[tuple[int, int], list[int]] = {}
         for _, row in hist_df.iterrows():
             batter = int(row["batter"])
             game_pk = int(row["game_pk"])
             hist_ids = row["hist_at_bat_ids"]
-            # このdf内に存在する at_bat_id のみフィルタ
-            valid_ids = [aid for aid in hist_ids if aid in self.atbat_to_local_rows]
-            self.batter_game_to_hist[(batter, game_pk)] = valid_ids
+            valid_ids = [aid for aid in hist_ids if aid in atbat_to_local_rows]
+            if valid_ids:
+                batter_game_to_hist[(batter, game_pk)] = valid_ids
 
-        # 各サンプルの (batter, game_pk) を保持
-        self.sample_batter = df["batter"].to_numpy(dtype=np.int64)
-        self.sample_game_pk = df["game_pk"].to_numpy(dtype=np.int64)
+        # ユニークな (batter, game_pk) ペアを特定し、各サンプルをマッピング
+        sample_batter = df["batter"].to_numpy(dtype=np.int64)
+        sample_game_pk = df["game_pk"].to_numpy(dtype=np.int64)
+        bg_keys = np.column_stack([sample_batter, sample_game_pk])
+        unique_pairs, bg_inverse = np.unique(bg_keys, axis=0, return_inverse=True)
+        self._sample_bg_idx = bg_inverse.astype(np.int64)
+
+        U = len(unique_pairs)
+        bg_pair_to_idx = {(int(row[0]), int(row[1])): idx for idx, row in enumerate(unique_pairs)}
+
+        # 事前計算配列の初期化（無効エントリはダミー行を参照）
+        self._bg_rows_2d = np.full((U, N, P), dummy_idx, dtype=np.int64)
+        self._bg_pitch_mask = np.zeros((U, N, P), dtype=np.bool_)
+        self._bg_atbat_mask = np.zeros((U, N), dtype=np.bool_)
+        self._bg_last_rows = np.full((U, N), dummy_idx, dtype=np.int64)
+
+        for pair, bg_idx in bg_pair_to_idx.items():
+            hist_at_bat_ids = batter_game_to_hist.get(pair, [])
+            if len(hist_at_bat_ids) > N:
+                hist_at_bat_ids = hist_at_bat_ids[-N:]
+
+            for ab_idx, at_bat_id in enumerate(hist_at_bat_ids):
+                rows = atbat_to_local_rows.get(at_bat_id)
+                if rows is None or len(rows) == 0:
+                    continue
+
+                self._bg_atbat_mask[bg_idx, ab_idx] = True
+                pitch_rows = rows[:P] if len(rows) > P else rows
+                n_pitches = len(pitch_rows)
+                self._bg_rows_2d[bg_idx, ab_idx, :n_pitches] = pitch_rows
+                self._bg_pitch_mask[bg_idx, ab_idx, :n_pitches] = True
+                self._bg_last_rows[bg_idx, ab_idx] = rows[-1]
+
+        print(f"  Batter history pre-computed: {U} unique (batter, game_pk) pairs")
 
     def __len__(self) -> int:
-        return len(self.swing_attempt)
+        return self._n_real_samples
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         group_idx, pos = int(self.sample_to_group[idx, 0]), int(self.sample_to_group[idx, 1])
@@ -186,51 +223,26 @@ class StatcastBatterHistDataset(Dataset):
             seq_swing_result[:seq_len] = self.swing_result[pi]
             seq_mask[:seq_len] = 1.0
 
-        # === 打者履歴 ===
+        # === 打者履歴（事前計算済みインデックスによるベクトル化） ===
         N = self.batter_hist_max_atbats
         P = self.batter_hist_max_pitches
 
-        hist_pitch_type = torch.zeros(N, P, dtype=torch.long)
-        hist_cont = torch.zeros(N, P, self.num_cont, dtype=torch.float32)
-        hist_swing_attempt = torch.zeros(N, P, dtype=torch.float32)
-        hist_swing_result = torch.full((N, P), -1, dtype=torch.long)
-        hist_bb_type = torch.full((N,), -1, dtype=torch.long)
-        hist_launch_speed = torch.zeros(N, dtype=torch.float32)
-        hist_launch_angle = torch.zeros(N, dtype=torch.float32)
-        hist_pitch_mask = torch.zeros(N, P, dtype=torch.float32)
-        hist_atbat_mask = torch.zeros(N, dtype=torch.float32)
+        bg_idx = self._sample_bg_idx[idx]
 
-        batter = int(self.sample_batter[idx])
-        game_pk = int(self.sample_game_pk[idx])
-        hist_at_bat_ids = self.batter_game_to_hist.get((batter, game_pk), [])
+        # ダミー行を参照するインデックスにより無効エントリは自動的にデフォルト値になる
+        rows_tensor = torch.from_numpy(self._bg_rows_2d[bg_idx].reshape(-1).copy())  # (N*P,)
+        hist_pitch_type = self.cat_features["pitch_type"][rows_tensor].reshape(N, P)
+        hist_cont = self.cont_features[rows_tensor].reshape(N, P, -1)
+        hist_swing_attempt = self.swing_attempt[rows_tensor].reshape(N, P)
+        hist_swing_result = self.swing_result[rows_tensor].reshape(N, P)
 
-        # 直近 N 打席のみ使用（末尾が最新）
-        if len(hist_at_bat_ids) > N:
-            hist_at_bat_ids = hist_at_bat_ids[-N:]
+        hist_pitch_mask = torch.tensor(self._bg_pitch_mask[bg_idx], dtype=torch.float32)
+        hist_atbat_mask = torch.tensor(self._bg_atbat_mask[bg_idx], dtype=torch.float32)
 
-        for ab_idx, at_bat_id in enumerate(hist_at_bat_ids):
-            rows = self.atbat_to_local_rows.get(at_bat_id)
-            if rows is None or len(rows) == 0:
-                continue
-
-            hist_atbat_mask[ab_idx] = 1.0
-
-            # 投球数を制限
-            pitch_rows = rows[:P] if len(rows) > P else rows
-            n_pitches = len(pitch_rows)
-            ri = torch.from_numpy(pitch_rows)
-
-            hist_pitch_type[ab_idx, :n_pitches] = self.cat_features["pitch_type"][ri]
-            hist_cont[ab_idx, :n_pitches] = self.cont_features[ri]
-            hist_swing_attempt[ab_idx, :n_pitches] = self.swing_attempt[ri]
-            hist_swing_result[ab_idx, :n_pitches] = self.swing_result[ri]
-            hist_pitch_mask[ab_idx, :n_pitches] = 1.0
-
-            # 打席結果は最後の投球のもの
-            last_row = rows[-1]
-            hist_bb_type[ab_idx] = self.bb_type[last_row]
-            hist_launch_speed[ab_idx] = self.reg_targets[last_row, 0]  # launch_speed (normalized)
-            hist_launch_angle[ab_idx] = self.reg_targets[last_row, 1]  # launch_angle (normalized)
+        last_tensor = torch.from_numpy(self._bg_last_rows[bg_idx].copy())  # (N,)
+        hist_bb_type = self.bb_type[last_tensor]
+        hist_launch_speed = self.reg_targets[last_tensor, 0]
+        hist_launch_angle = self.reg_targets[last_tensor, 1]
 
         # 現在の投球の特徴量
         cat = {col: self.cat_features[col][idx] for col in self.cfg.categorical_features}

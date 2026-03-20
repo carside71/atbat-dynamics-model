@@ -111,7 +111,7 @@ def evaluate(
     bt_correct, bt_total = 0, 0
 
     for batch in loader:
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
         _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
@@ -191,8 +191,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     use_seq = model_cfg.max_seq_len > 0
     use_batter_hist = model_cfg.batter_hist_max_atbats > 0
     need_at_bat_id = use_seq or use_batter_hist
-    # game_pk, batter は batter_hist Dataset で必要
-    extra_cols_to_keep = ["game_pk"] if use_batter_hist else []
+    # # game_pk, batter は batter_hist Dataset で必要
+    # extra_cols_to_keep = ["game_pk"] if use_batter_hist else []
 
     if need_at_bat_id:
         train_df = all_df[all_df["at_bat_id"].isin(train_ids)].reset_index(drop=True)
@@ -248,6 +248,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         val_ds = StatcastDataset(val_df, data_cfg, norm_stats, reg_norm_stats)
     del train_df, val_df  # メモリ解放
 
+    use_persistent = train_cfg.num_workers > 0
     train_loader = DataLoader(
         train_ds,
         batch_size=train_cfg.batch_size,
@@ -255,6 +256,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         num_workers=train_cfg.num_workers,
         pin_memory=True,
         drop_last=True,
+        persistent_workers=use_persistent,
     )
     val_loader = DataLoader(
         val_ds,
@@ -262,6 +264,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         shuffle=False,
         num_workers=train_cfg.num_workers,
         pin_memory=True,
+        persistent_workers=use_persistent,
     )
 
     # === モデル構築 ===
@@ -302,7 +305,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{train_cfg.num_epochs}")
         for batch in pbar:
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
             optimizer.zero_grad()
             outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)

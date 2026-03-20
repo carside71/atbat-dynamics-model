@@ -65,7 +65,7 @@ train:
   num_epochs: 30
   lr: 1.0e-3
   weight_decay: 1.0e-5
-  num_workers: 4
+  num_workers: 8
   device: cuda
 
   loss_weight_swing_attempt: 1.0
