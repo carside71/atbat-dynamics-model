@@ -8,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    graphviz \
     && rm -rf /var/lib/apt/lists/*
 
 # 作業ディレクトリの設定
