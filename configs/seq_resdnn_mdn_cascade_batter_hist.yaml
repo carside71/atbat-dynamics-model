@@ -1,0 +1,79 @@
+# AtBat Dynamics Model 設定ファイル (Sequence + ResBlock + GELU + Batter History Encoder)
+# 過去投球系列を GRU でエンコードし、さらに直近50打席の打撃履歴もエンコードして予測
+
+data:
+  data_dir: /workspace/datasets/statcast-customized/data
+  stats_dir: /workspace/datasets/statcast-customized/stats
+  split_dir: /workspace/datasets/statcast-customized/split
+  output_dir: /workspace/outputs
+  batter_history_dir: /workspace/datasets/statcast-customized/batter_history
+
+  categorical_features:
+    - p_throws
+    - pitch_type
+    - batter
+    - stand
+    - base_out_state
+    - count_state
+  continuous_features:
+    - release_speed
+    - release_spin_rate
+    - pfx_x
+    - pfx_z
+    - plate_x
+    - plate_z
+    - vx0
+    - vy0
+    - vz0
+    - ax
+    - ay
+    - az
+    - sz_top
+    - sz_bot
+    - plate_z_norm
+  ordinal_features:
+    - inning_clipped
+    - is_inning_top
+    - diff_score_clipped
+    - pitch_number_clipped
+
+  target_cls_swing_attempt: swing_attempt
+  target_cls_swing_result: swing_result
+  target_cls_bb_type: bb_type
+  target_reg:
+    - launch_speed
+    - launch_angle
+    - hit_distance_sc
+
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  head_strategy: cascade
+  detach_cascade: true  # false にすると下流勾配が上流ヘッドにも伝搬
+  regression_head_type: mdn
+  mdn_num_components: 5
+  max_seq_len: 10
+  seq_encoder_type: gru
+  seq_hidden_dim: 64
+  seq_num_layers: 1
+  seq_bidirectional: false
+  batter_hist_max_atbats: 50
+  batter_hist_max_pitches: 10
+  batter_hist_hidden_dim: 64
+  batter_hist_num_layers: 1
+
+train:
+  batch_size: 2048
+  num_epochs: 30
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  num_workers: 8
+  device: cuda
+
+  loss_weight_swing_attempt: 1.0
+  loss_weight_swing_result: 1.0
+  loss_weight_bb_type: 1.0
+  loss_weight_regression: 0.01
+  label_smoothing: 0.1
