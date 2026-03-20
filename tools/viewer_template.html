@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AtBat Dynamics — Prediction Viewer</title>
+<style>
+:root {
+  --bg: #1a1a2e;
+  --card-bg: #16213e;
+  --text: #e0e0e0;
+  --text-dim: #8892a0;
+  --accent: #0f3460;
+  --correct: #27ae60;
+  --wrong: #e74c3c;
+  --bar-bg: #2c3e50;
+  --highlight: #e94560;
+  --border: #2c3e50;
+  --zone-bg: #0d1b2a;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+.header {
+  background: var(--accent);
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nav-controls button {
+  background: rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+.nav-controls button:hover { background: rgba(255,255,255,0.25); }
+.nav-controls button:disabled { opacity: 0.4; cursor: default; }
+.nav-controls input[type="number"] {
+  width: 80px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  background: rgba(0,0,0,0.3);
+  color: var(--text);
+  font-size: 14px;
+  text-align: center;
+}
+.nav-controls select {
+  padding: 5px 8px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  background: rgba(0,0,0,0.3);
+  color: var(--text);
+  font-size: 14px;
+}
+.summary-bar {
+  background: var(--card-bg);
+  padding: 8px 24px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.summary-bar span { margin-right: 20px; }
+.card-container {
+  max-width: 960px;
+  margin: 20px auto;
+  padding: 0 16px;
+}
+.card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+.card-section {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.card-section:last-child { border-bottom: none; }
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+/* Input info grid */
+.input-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+.input-left {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  align-content: start;
+}
+.input-left .label {
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: right;
+  white-space: nowrap;
+}
+.input-left .value {
+  font-size: 13px;
+  font-weight: 500;
+}
+/* Strike zone SVG */
+.zone-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.zone-svg {
+  background: var(--zone-bg);
+  border-radius: 8px;
+}
+/* Prediction bars */
+.pred-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+.pred-row:last-child { margin-bottom: 0; }
+.pred-label {
+  width: 110px;
+  font-size: 13px;
+  text-align: right;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.pred-bar-container {
+  flex: 1;
+  height: 22px;
+  background: var(--bar-bg);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+.pred-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+.pred-prob {
+  width: 55px;
+  font-size: 13px;
+  text-align: right;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.pred-result {
+  width: 28px;
+  font-size: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+/* Binary prediction */
+.binary-pred {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.binary-bar-outer {
+  flex: 1;
+  height: 26px;
+  background: var(--bar-bg);
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+.binary-bar-fill {
+  height: 100%;
+  border-radius: 6px;
+}
+.binary-bar-threshold {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: rgba(255,255,255,0.5);
+}
+.binary-info {
+  font-size: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+/* Regression table */
+.reg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.reg-table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.reg-table td {
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.reg-table .na { color: var(--text-dim); font-style: italic; }
+/* Result icons */
+.correct { color: var(--correct); }
+.wrong { color: var(--wrong); }
+.na-text { color: var(--text-dim); font-style: italic; }
+/* Keyboard hint */
+.kbd-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 12px;
+}
+kbd {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 12px;
+}
+/* Highlighted GT row */
+.gt-highlight {
+  background: rgba(255,255,255,0.05);
+  border-radius: 4px;
+}
+/* Game info section */
+.game-info {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 24px;
+  font-size: 13px;
+}
+.game-info-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.game-info-item .label {
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 60px;
+}
+.game-info-item .value {
+  font-weight: 500;
+}
+.game-info-item .id {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: 4px;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>AtBat Dynamics — Prediction Viewer</h1>
+  <div class="nav-controls">
+    <select id="filterSelect" title="フィルタ">
+      <option value="all">すべて</option>
+      <option value="valid_only">有効入力のみ</option>
+      <option value="sa_wrong">SA 誤分類</option>
+      <option value="sr_wrong">SR 誤分類</option>
+      <option value="bt_wrong">BT 誤分類</option>
+      <option value="any_wrong">いずれか誤分類</option>
+    </select>
+    <button id="prevBtn" title="前のサンプル (←)">◀ Prev</button>
+    <input type="number" id="jumpInput" min="1" value="1" title="サンプル番号">
+    <span id="totalLabel" style="font-size:13px;color:var(--text-dim)">/ 0</span>
+    <button id="nextBtn" title="次のサンプル (→)">Next ▶</button>
+  </div>
+</div>
+
+<div class="summary-bar" id="summaryBar"></div>
+
+<div class="card-container">
+  <div class="card" id="sampleCard"></div>
+</div>
+
+<div class="kbd-hint">
+  <kbd>←</kbd> / <kbd>→</kbd> で前後移動　|　<kbd>Home</kbd> 先頭　|　<kbd>End</kbd> 最後
+</div>
+
+<script>
+// === データ埋め込み ===
+const SAMPLES = __SAMPLES_DATA__;
+const TOTAL_SAMPLES = __TOTAL_SAMPLES__;
+const SHOWN_SAMPLES = __SHOWN_SAMPLES__;
+
+// === フィルタリング ===
+let filteredIndices = [];
+let currentPos = 0;
+
+function isSAWrong(s) {
+  return (s.swing_attempt.prob > 0.5 ? 1 : 0) !== s.swing_attempt.true;
+}
+function isSRWrong(s) {
+  if (s.swing_result.true < 0) return false;
+  const pred = s.swing_result.probs.indexOf(Math.max(...s.swing_result.probs));
+  return pred !== s.swing_result.true;
+}
+function isBTWrong(s) {
+  if (s.bb_type.true < 0) return false;
+  const pred = s.bb_type.probs.indexOf(Math.max(...s.bb_type.probs));
+  return pred !== s.bb_type.true;
+}
+
+function applyFilter(mode) {
+  filteredIndices = [];
+  for (let i = 0; i < SAMPLES.length; i++) {
+    const s = SAMPLES[i];
+    if (mode === "all") { filteredIndices.push(i); continue; }
+    if (mode === "valid_only" && s.valid_input) { filteredIndices.push(i); continue; }
+    if (mode === "sa_wrong" && s.valid_input && isSAWrong(s)) { filteredIndices.push(i); continue; }
+    if (mode === "sr_wrong" && s.valid_input && isSRWrong(s)) { filteredIndices.push(i); continue; }
+    if (mode === "bt_wrong" && s.valid_input && isBTWrong(s)) { filteredIndices.push(i); continue; }
+    if (mode === "any_wrong" && s.valid_input && (isSAWrong(s) || isSRWrong(s) || isBTWrong(s))) { filteredIndices.push(i); continue; }
+  }
+  currentPos = 0;
+  updateSummary();
+  render();
+}
+
+function updateSummary() {
+  const bar = document.getElementById("summaryBar");
+  // 有効サンプルのみで統計
+  let saCorrect = 0, saTotal = 0, srCorrect = 0, srTotal = 0, btCorrect = 0, btTotal = 0;
+  let nValid = 0, nInvalid = 0;
+  for (const s of SAMPLES) {
+    if (!s.valid_input) { nInvalid++; continue; }
+    nValid++;
+    saTotal++;
+    if (!isSAWrong(s)) saCorrect++;
+    if (s.swing_result.true >= 0) { srTotal++; if (!isSRWrong(s)) srCorrect++; }
+    if (s.bb_type.true >= 0) { btTotal++; if (!isBTWrong(s)) btCorrect++; }
+  }
+  const pct = (c, t) => t > 0 ? (c / t * 100).toFixed(1) + "%" : "N/A";
+  bar.innerHTML =
+    `<span>全 ${TOTAL_SAMPLES.toLocaleString()} 件中 ${SHOWN_SAMPLES.toLocaleString()} 件を表示</span>` +
+    `<span>フィルタ後: ${filteredIndices.length} 件</span>` +
+    (nInvalid > 0 ? `<span>欠損: ${nInvalid} 件</span>` : '') +
+    `<span>SA正解率: ${pct(saCorrect, saTotal)}</span>` +
+    `<span>SR正解率: ${pct(srCorrect, srTotal)}</span>` +
+    `<span>BT正解率: ${pct(btCorrect, btTotal)}</span>`;
+}
+
+// === 描画 ===
+function render() {
+  const card = document.getElementById("sampleCard");
+  const jumpInput = document.getElementById("jumpInput");
+  const totalLabel = document.getElementById("totalLabel");
+
+  if (filteredIndices.length === 0) {
+    card.innerHTML = '<div class="card-section" style="text-align:center;padding:40px;">該当するサンプルがありません</div>';
+    totalLabel.textContent = "/ 0";
+    jumpInput.value = 0;
+    return;
+  }
+
+  const s = SAMPLES[filteredIndices[currentPos]];
+  totalLabel.textContent = `/ ${filteredIndices.length}`;
+  jumpInput.value = currentPos + 1;
+  jumpInput.max = filteredIndices.length;
+
+  document.getElementById("prevBtn").disabled = currentPos <= 0;
+  document.getElementById("nextBtn").disabled = currentPos >= filteredIndices.length - 1;
+
+  let html = "";
+
+  // === Game Info Section ===
+  if (s.game_info) {
+    const g = s.game_info;
+    html += '<div class="card-section">';
+    html += '<div class="section-title">試合情報</div>';
+    html += '<div class="game-info">';
+    if (g.batter_name) {
+      html += `<div class="game-info-item"><span class="label">打者:</span><span class="value">${g.batter_name}<span class="id">#${g.batter_id}</span></span></div>`;
+    }
+    if (g.pitcher_name) {
+      html += `<div class="game-info-item"><span class="label">投手:</span><span class="value">${g.pitcher_name}<span class="id">#${g.pitcher_id}</span></span></div>`;
+    }
+    if (g.home_team && g.away_team) {
+      html += `<div class="game-info-item"><span class="label">チーム:</span><span class="value">${g.away_team} @ ${g.home_team}</span></div>`;
+    }
+    if (g.game_date) {
+      html += `<div class="game-info-item"><span class="label">日付:</span><span class="value">${g.game_date}</span></div>`;
+    }
+    if (g.game_pk) {
+      html += `<div class="game-info-item"><span class="label">Game ID:</span><span class="value">${g.game_pk}</span></div>`;
+    }
+    if (g.at_bat_number) {
+      html += `<div class="game-info-item"><span class="label">打席 #:</span><span class="value">${g.at_bat_number}</span></div>`;
+    }
+    if (g.at_bat_id !== undefined) {
+      html += `<div class="game-info-item"><span class="label">AB ID:</span><span class="value">${g.at_bat_id}</span></div>`;
+    }
+    html += '</div></div>';
+  }
+
+  // === Input Section ===
+  html += '<div class="card-section">';
+  html += `<div class="section-title">入力情報 — Sample #${s.idx}`;
+  if (!s.valid_input) {
+    html += ' <span style="color:var(--wrong);font-size:11px;margin-left:8px">⚠ 欠損データ</span>';
+  }
+  html += '</div>';
+  html += '<div class="input-grid">';
+
+  // Left: features
+  html += '<div class="input-left">';
+  const inputOrder = [
+    ["pitch_type", "Pitch Type"], ["p_throws", "P Throws"], ["stand", "Stand"],
+    ["count_state", "Count"], ["base_out_state", "Base/Out"],
+    ["inning_clipped", "Inning"], ["is_inning_top", "Inn. Top"],
+    ["diff_score_clipped", "Score Diff"], ["pitch_number_clipped", "Pitch #"],
+    ["release_speed", "Speed (mph)"], ["release_spin_rate", "Spin Rate"],
+    ["pfx_x", "PFX X (in)"], ["pfx_z", "PFX Z (in)"],
+  ];
+  for (const [key, label] of inputOrder) {
+    if (s.inputs[key] !== undefined) {
+      let val = s.inputs[key];
+      if (val === null) {
+        html += `<span class="label">${label}:</span><span class="value na-text">N/A</span>`;
+      } else {
+        if (key === "is_inning_top") val = val === 1 ? "Top" : "Bot";
+        html += `<span class="label">${label}:</span><span class="value">${val}</span>`;
+      }
+    }
+  }
+  html += '</div>';
+
+  // Right: strike zone
+  html += '<div class="zone-container">';
+  if (s.strike_zone) {
+    html += renderStrikeZone(s.strike_zone);
+  }
+  html += '</div>';
+
+  html += '</div></div>';
+
+  // === Swing Attempt ===
+  html += '<div class="card-section">';
+  html += '<div class="section-title">Swing Attempt</div>';
+  const saTrue = s.swing_attempt.true;
+  const saProb = s.swing_attempt.prob;
+  const saPred = saProb > 0.5 ? 1 : 0;
+  const saOk = saPred === saTrue;
+  const saColor = saOk ? "var(--correct)" : "var(--wrong)";
+  html += '<div class="binary-pred">';
+  html += `<span style="width:80px;text-align:right;font-size:13px">GT: ${saTrue === 1 ? "Swing" : "No Swing"}</span>`;
+  html += '<div class="binary-bar-outer">';
+  html += `<div class="binary-bar-fill" style="width:${saProb*100}%;background:${saColor}"></div>`;
+  html += '<div class="binary-bar-threshold"></div>';
+  html += '</div>';
+  html += '<div class="binary-info">';
+  html += `<span>${(saProb*100).toFixed(1)}%</span>`;
+  html += `<span class="${saOk ? 'correct' : 'wrong'}">${saOk ? '✓' : '✗'}</span>`;
+  html += '</div></div></div>';
+
+  // === Swing Result ===
+  html += '<div class="card-section">';
+  html += '<div class="section-title">Swing Result</div>';
+  if (s.swing_result.true < 0) {
+    html += '<div class="na-text">N/A（スイングなし）</div>';
+  } else {
+    const srPred = s.swing_result.probs.indexOf(Math.max(...s.swing_result.probs));
+    const srOk = srPred === s.swing_result.true;
+    html += renderMulticlassBar(s.swing_result.names, s.swing_result.probs, s.swing_result.true, srOk);
+  }
+  html += '</div>';
+
+  // === BB Type ===
+  html += '<div class="card-section">';
+  html += '<div class="section-title">Batted Ball Type</div>';
+  if (s.bb_type.true < 0) {
+    html += '<div class="na-text">N/A（インプレーなし）</div>';
+  } else {
+    const btPred = s.bb_type.probs.indexOf(Math.max(...s.bb_type.probs));
+    const btOk = btPred === s.bb_type.true;
+    html += renderMulticlassBar(s.bb_type.names, s.bb_type.probs, s.bb_type.true, btOk);
+  }
+  html += '</div>';
+
+  // === Regression ===
+  html += '<div class="card-section">';
+  html += '<div class="section-title">Regression</div>';
+  html += '<table class="reg-table"><thead><tr><th>Target</th><th>Pred</th><th>GT</th><th>Error</th></tr></thead><tbody>';
+  for (const r of s.regression) {
+    if (!r.valid) {
+      html += `<tr><td>${r.name}</td><td class="na">—</td><td class="na">—</td><td class="na">N/A</td></tr>`;
+    } else {
+      const err = Math.abs(r.pred - r.true);
+      html += `<tr><td>${r.name}</td><td>${r.pred.toFixed(1)}</td><td>${r.true.toFixed(1)}</td><td>${err.toFixed(1)}</td></tr>`;
+    }
+  }
+  html += '</tbody></table></div>';
+
+  card.innerHTML = html;
+}
+
+function renderMulticlassBar(names, probs, trueIdx, isCorrect) {
+  let html = "";
+  const maxProb = Math.max(...probs);
+  const predIdx = probs.indexOf(maxProb);
+  for (let i = 0; i < names.length; i++) {
+    const isGt = i === trueIdx;
+    const isPred = i === predIdx;
+    const cls = isGt ? ' gt-highlight' : '';
+    html += `<div class="pred-row${cls}">`;
+    html += `<span class="pred-label">${isGt ? '▸ ' : ''}${names[i]}</span>`;
+    html += '<div class="pred-bar-container">';
+    const barColor = isGt
+      ? (isCorrect ? "var(--correct)" : "var(--wrong)")
+      : (isPred && !isCorrect ? "var(--wrong)" : "rgba(255,255,255,0.15)");
+    html += `<div class="pred-bar" style="width:${probs[i]*100}%;background:${barColor}"></div>`;
+    html += '</div>';
+    html += `<span class="pred-prob">${(probs[i]*100).toFixed(1)}%</span>`;
+    if (isPred) {
+      html += `<span class="pred-result ${isCorrect ? 'correct' : 'wrong'}">${isCorrect ? '✓' : '✗'}</span>`;
+    } else {
+      html += '<span class="pred-result"></span>';
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function renderStrikeZone(sz) {
+  // SVG: ホームプレート視点（捕手から見た図）
+  // Statcast の plate_x: -左打席側 / +右打席側（ft）
+  // plate_z: 地面からの高さ（ft）
+  const W = 180, H = 200;
+  const margin = 30;
+
+  // 表示範囲: x [-2, 2] ft, z [0, 5] ft
+  const xMin = -2, xMax = 2, zMin = 0, zMax = 5;
+  const scaleX = (v) => margin + (v - xMin) / (xMax - xMin) * (W - 2 * margin);
+  const scaleZ = (v) => margin + (zMax - v) / (zMax - zMin) * (H - 2 * margin);
+
+  // ストライクゾーン矩形
+  const zoneLeft = scaleX(-17/24);  // ~ -0.708 ft (ホームプレート幅 17in)
+  const zoneRight = scaleX(17/24);
+  const zoneTop = scaleZ(sz.sz_top);
+  const zoneBot = scaleZ(sz.sz_bot);
+
+  // ボール位置
+  const bx = scaleX(sz.plate_x);
+  const bz = scaleZ(sz.plate_z);
+
+  // ゾーン内判定
+  const inZone = sz.plate_x >= -17/24 && sz.plate_x <= 17/24 && sz.plate_z >= sz.sz_bot && sz.plate_z <= sz.sz_top;
+  const ballColor = inZone ? "#e94560" : "#3498db";
+
+  let svg = `<svg class="zone-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  // ゾーン
+  svg += `<rect x="${zoneLeft}" y="${zoneTop}" width="${zoneRight-zoneLeft}" height="${zoneBot-zoneTop}" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5" stroke-dasharray="4,2"/>`;
+  // 9分割線
+  const tw = (zoneRight - zoneLeft) / 3;
+  const th = (zoneBot - zoneTop) / 3;
+  for (let i = 1; i < 3; i++) {
+    svg += `<line x1="${zoneLeft+tw*i}" y1="${zoneTop}" x2="${zoneLeft+tw*i}" y2="${zoneBot}" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>`;
+    svg += `<line x1="${zoneLeft}" y1="${zoneTop+th*i}" x2="${zoneRight}" y2="${zoneTop+th*i}" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>`;
+  }
+  // ボール
+  svg += `<circle cx="${bx}" cy="${bz}" r="6" fill="${ballColor}" stroke="white" stroke-width="1"/>`;
+  // 座標テキスト
+  svg += `<text x="${W/2}" y="${H-4}" text-anchor="middle" fill="var(--text-dim)" font-size="10">x=${sz.plate_x.toFixed(2)} z=${sz.plate_z.toFixed(2)}</text>`;
+  svg += '</svg>';
+  return svg;
+}
+
+// === イベント ===
+document.getElementById("prevBtn").addEventListener("click", () => {
+  if (currentPos > 0) { currentPos--; render(); }
+});
+document.getElementById("nextBtn").addEventListener("click", () => {
+  if (currentPos < filteredIndices.length - 1) { currentPos++; render(); }
+});
+document.getElementById("jumpInput").addEventListener("change", (e) => {
+  let v = parseInt(e.target.value, 10);
+  if (isNaN(v)) return;
+  v = Math.max(1, Math.min(filteredIndices.length, v));
+  currentPos = v - 1;
+  render();
+});
+document.getElementById("filterSelect").addEventListener("change", (e) => {
+  applyFilter(e.target.value);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === "ArrowLeft") { if (currentPos > 0) { currentPos--; render(); } e.preventDefault(); }
+  if (e.key === "ArrowRight") { if (currentPos < filteredIndices.length - 1) { currentPos++; render(); } e.preventDefault(); }
+  if (e.key === "Home") { currentPos = 0; render(); e.preventDefault(); }
+  if (e.key === "End") { currentPos = filteredIndices.length - 1; render(); e.preventDefault(); }
+});
+
+// === 初期化 ===
+applyFilter("all");
+</script>
+</body>
+</html>
