@@ -56,12 +56,18 @@ def collect_predictions(
     data_cfg: DataConfig,
     device: torch.device,
     use_seq: bool = False,
+    save_inputs: bool = False,
 ) -> dict[str, np.ndarray]:
     """全バッチの予測とラベルを収集する."""
     all_sa_prob, all_sa_true = [], []
     all_sr_logits, all_sr_true = [], []
     all_bt_logits, all_bt_true = [], []
     all_reg_pred, all_reg_true, all_reg_mask = [], [], []
+
+    # 入力特徴量の収集用（save_inputs=True 時のみ）
+    all_cat: dict[str, list[np.ndarray]] = {col: [] for col in data_cfg.categorical_features} if save_inputs else {}
+    all_cont: list[np.ndarray] = [] if save_inputs else []
+    all_ord: list[np.ndarray] = [] if save_inputs else []
 
     for batch in tqdm(loader, desc="Predicting"):
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -89,7 +95,13 @@ def collect_predictions(
         all_reg_true.append(batch["reg_targets"].cpu().numpy())
         all_reg_mask.append(batch["reg_mask"].cpu().numpy())
 
-    return {
+        if save_inputs:
+            for col in data_cfg.categorical_features:
+                all_cat[col].append(batch[col].cpu().numpy())
+            all_cont.append(batch["cont"].cpu().numpy())
+            all_ord.append(batch["ord"].cpu().numpy())
+
+    result = {
         "sa_prob": np.concatenate(all_sa_prob),
         "sa_true": np.concatenate(all_sa_true),
         "sr_logits": np.concatenate(all_sr_logits),
@@ -100,6 +112,14 @@ def collect_predictions(
         "reg_true": np.concatenate(all_reg_true),
         "reg_mask": np.concatenate(all_reg_mask),
     }
+
+    if save_inputs:
+        for col in data_cfg.categorical_features:
+            result[f"cat_{col}"] = np.concatenate(all_cat[col])
+        result["cont"] = np.concatenate(all_cont)
+        result["ord"] = np.concatenate(all_ord)
+
+    return result
 
 
 def evaluate_swing_attempt(sa_prob: np.ndarray, sa_true: np.ndarray) -> dict:
@@ -264,6 +284,11 @@ def main():
     parser.add_argument(
         "--split", type=str, default="test", choices=["test", "val"], help="Which split to evaluate (default: test)"
     )
+    parser.add_argument(
+        "--save-predictions",
+        action="store_true",
+        help="Save per-sample predictions and inputs as NPZ for visualization",
+    )
     args = parser.parse_args()
 
     if args.config:
@@ -340,7 +365,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     model = load_trained_model(model_path, model_config_path, device)
 
     # === 予測収集 ===
-    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq)
+    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, save_inputs=args.save_predictions)
 
     # === 評価 ===
     results = {}
@@ -362,6 +387,44 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\nResults saved to {output_path}")
+
+    # === 予測値・入力特徴量を NPZ で保存 ===
+    if args.save_predictions:
+        npz_path = test_output_dir / f"predictions_{args.split}.npz"
+        np.savez_compressed(npz_path, **preds)
+        print(f"Predictions saved to {npz_path}")
+
+        # メタデータ JSON（ラベル名・正規化パラメータ等）
+        cat_label_maps = {}
+        for col in data_cfg.categorical_features:
+            if col in stats:
+                df_stat = stats[col]
+                value_col = col  # stats CSV のカラム名は特徴量名と同じ
+                cat_label_maps[col] = {int(row["class_label"]): str(row[value_col]) for _, row in df_stat.iterrows()}
+        # stats_all.csv からの追加読み込み（base_out_state, count_state 等）
+        if "all" in stats:
+            stats_all_df = stats["all"]
+            for col in data_cfg.categorical_features:
+                if col not in cat_label_maps:
+                    sub = stats_all_df[stats_all_df["feature"] == col]
+                    if len(sub) > 0:
+                        cat_label_maps[col] = {int(row["class_label"]): str(row["value"]) for _, row in sub.iterrows()}
+
+        meta = {
+            "sr_names": sr_names,
+            "bt_names": bt_names,
+            "reg_cols": list(data_cfg.target_reg),
+            "reg_norm_stats": {k: list(v) for k, v in reg_norm_stats.items()},
+            "input_norm_stats": {k: list(v) for k, v in norm_stats.items()},
+            "continuous_features": list(data_cfg.continuous_features),
+            "ordinal_features": list(data_cfg.ordinal_features),
+            "categorical_features": list(data_cfg.categorical_features),
+            "cat_label_maps": cat_label_maps,
+        }
+        meta_path = test_output_dir / f"predictions_meta_{args.split}.json"
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        print(f"Predictions metadata saved to {meta_path}")
 
 
 if __name__ == "__main__":
