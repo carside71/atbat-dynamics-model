@@ -45,7 +45,7 @@ data:
     - hit_distance_sc
 
 model:
-  architecture: atbat_seq_resdnn
+  backbone_type: resdnn
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2

@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from config import DataConfig, ModelConfig, load_config
 from datasets import compute_embedding_dim
-from models import create_model, get_registered_models
+from models import create_model
 from utils.graph_export import create_dummy_inputs, export_graph
 
 # --- デフォルトのカーディナリティ（stats 不要時のフォールバック） ---
@@ -44,13 +44,14 @@ _DEFAULT_CAT_CARDINALITY: dict[str, int] = {
 }
 
 # --- アーキテクチャ名 → 代表 config YAML のマッピング ---
-_ARCH_TO_CONFIG: dict[str, str] = {
-    "atbat_dnn": "configs/dnn.yaml",
-    "atbat_dnn_mdn": "configs/dnn_mdn.yaml",
-    "atbat_resdnn": "configs/resdnn.yaml",
-    "atbat_resdnn_cascade": "configs/resdnn_cascade.yaml",
-    "atbat_seq_resdnn": "configs/seq_resdnn.yaml",
-    "atbat_seq_resdnn_batter_hist": "configs/seq_resdnn_batter_hist.yaml",
+_NAME_TO_CONFIG: dict[str, str] = {
+    "dnn": "configs/dnn.yaml",
+    "dnn_mdn": "configs/dnn_mdn.yaml",
+    "resdnn": "configs/resdnn.yaml",
+    "resdnn_cascade": "configs/resdnn_cascade.yaml",
+    "resdnn_focal": "configs/resdnn_focal.yaml",
+    "seq_resdnn": "configs/seq_resdnn.yaml",
+    "seq_resdnn_batter_hist": "configs/seq_resdnn_batter_hist.yaml",
 }
 
 
@@ -69,7 +70,7 @@ def _build_model_from_config(data_cfg: DataConfig, model_cfg: ModelConfig) -> tu
     num_cont = len(data_cfg.continuous_features)
     num_ord = len(data_cfg.ordinal_features)
 
-    model = create_model(model_cfg.architecture, model_cfg, num_cont, num_ord)
+    model = create_model(model_cfg, num_cont, num_ord)
     return model, num_cont, num_ord
 
 
@@ -83,7 +84,7 @@ def _try_load_config(config_path: str) -> tuple[DataConfig, ModelConfig]:
 
 
 def export_single_model(
-    arch_name: str,
+    name: str,
     model_cfg: ModelConfig,
     data_cfg: DataConfig,
     output_dir: Path,
@@ -100,11 +101,11 @@ def export_single_model(
         model, model_cfg, num_cont, num_ord, batch_size=batch_size, device="cpu"
     )
 
-    output_path = output_dir / f"{arch_name}.{fmt}"
+    output_path = output_dir / f"{name}.{fmt}"
     result_path = export_graph(
         model, cat_dict, cont, ord_feat, kwargs, output_path, backend=backend, fmt=fmt, depth=depth
     )
-    print(f"  [OK] {arch_name} -> {result_path}")
+    print(f"  [OK] {name} -> {result_path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,8 +116,8 @@ def parse_args() -> argparse.Namespace:
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--config", type=str, help="YAML 設定ファイルパス")
-    group.add_argument("--arch", type=str, help="アーキテクチャ名 (例: atbat_dnn)")
-    group.add_argument("--all", action="store_true", help="全登録モデルを出力")
+    group.add_argument("--name", type=str, help="プリセット名 (例: dnn, resdnn)")
+    group.add_argument("--all", action="store_true", help="全プリセットを出力")
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -145,38 +146,32 @@ def main() -> None:
     print(f"Backend: {args.backend} | Format: {args.format} | Output: {output_dir}")
 
     if args.all:
-        arch_names = get_registered_models()
-        print(f"全 {len(arch_names)} モデルをエクスポートします: {', '.join(arch_names)}")
-        for arch_name in arch_names:
-            config_yaml = _ARCH_TO_CONFIG.get(arch_name)
-            if config_yaml:
-                data_cfg, model_cfg = _try_load_config(config_yaml)
-            else:
-                data_cfg = DataConfig()
-                model_cfg = ModelConfig(architecture=arch_name)
+        names = sorted(_NAME_TO_CONFIG.keys())
+        print(f"全 {len(names)} モデルをエクスポートします: {', '.join(names)}")
+        for name in names:
+            data_cfg, model_cfg = _try_load_config(_NAME_TO_CONFIG[name])
             export_single_model(
-                arch_name, model_cfg, data_cfg, output_dir, args.format, args.backend, args.depth, args.batch_size
+                name, model_cfg, data_cfg, output_dir, args.format, args.backend, args.depth, args.batch_size
             )
 
     elif args.config:
         data_cfg, model_cfg = _try_load_config(args.config)
-        arch_name = model_cfg.architecture
-        print(f"モデル '{arch_name}' をエクスポートします (config: {args.config})")
+        name = Path(args.config).stem
+        print(f"モデル '{name}' をエクスポートします (config: {args.config})")
         export_single_model(
-            arch_name, model_cfg, data_cfg, output_dir, args.format, args.backend, args.depth, args.batch_size
+            name, model_cfg, data_cfg, output_dir, args.format, args.backend, args.depth, args.batch_size
         )
 
-    elif args.arch:
-        arch_name = args.arch
-        config_yaml = _ARCH_TO_CONFIG.get(arch_name)
-        if config_yaml:
-            data_cfg, model_cfg = _try_load_config(config_yaml)
-        else:
-            data_cfg = DataConfig()
-            model_cfg = ModelConfig(architecture=arch_name)
-        print(f"モデル '{arch_name}' をエクスポートします")
+    elif args.name:
+        name = args.name
+        config_yaml = _NAME_TO_CONFIG.get(name)
+        if config_yaml is None:
+            available = ", ".join(sorted(_NAME_TO_CONFIG.keys()))
+            raise ValueError(f"Unknown preset '{name}'. Available: {available}")
+        data_cfg, model_cfg = _try_load_config(config_yaml)
+        print(f"モデル '{name}' をエクスポートします")
         export_single_model(
-            arch_name, model_cfg, data_cfg, output_dir, args.format, args.backend, args.depth, args.batch_size
+            name, model_cfg, data_cfg, output_dir, args.format, args.backend, args.depth, args.batch_size
         )
 
     print("完了しました。")

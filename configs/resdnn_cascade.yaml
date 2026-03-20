@@ -45,10 +45,11 @@ data:
     - hit_distance_sc
 
 model:
-  architecture: atbat_resdnn_cascade
+  backbone_type: resdnn
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2
+  head_strategy: cascade
   detach_cascade: true  # false にすると下流勾配が上流ヘッドにも伝搬
 
 train:

@@ -1,563 +1,590 @@
 # src/models/
 
-モデルアーキテクチャの実装を配置するパッケージ。
-レジストリパターンにより、新しいモデルを追加するだけで学習・評価パイプラインから利用できます。
+コンポーネントベースのモデルアーキテクチャ。
+YAML 設定ファイルで各コンポーネント（Backbone, Head Strategy, Sequence Encoder 等）を選択・組み合わせてモデルを構築します。
 
-## 登録済みモデル一覧
+## ディレクトリ構成
 
-| 名前 | ファイル | 説明 |
-|------|----------|------|
-| `atbat_dnn` | `atbat_dnn.py` | 共有バックボーン + 4 ヘッドの MLP (ReLU + BatchNorm) |
-| `atbat_dnn_mdn` | `atbat_dnn_mdn.py` | 分類ヘッドは同一、回帰ヘッドを MDN (Mixture Density Network) に置換 |
-| `atbat_resdnn` | `atbat_resdnn.py` | 残差接続 + GELU + LayerNorm でバックボーンを強化 |
-| `atbat_resdnn_cascade` | `atbat_resdnn_cascade.py` | 上記 + カスケードヘッド（上流ヘッドの出力を下流に伝達） |
-| `atbat_seq_resdnn` | `atbat_seq_resdnn.py` | 打席内系列エンコーダ (GRU/Transformer) + ResBlock バックボーン |
-| `atbat_seq_resdnn_batter_hist` | `atbat_seq_resdnn_batter_hist.py` | 上記 + 階層 GRU 打者履歴エンコーダ |
+```
+models/
+  __init__.py          # create_model() ファクトリ
+  composable.py        # ComposableModel: コンポーネントを組み立てるモデル本体
+  components/
+    embedding.py       # FeatureEmbedding
+    backbones.py       # DNNBackbone, ResDNNBackbone
+    heads.py           # build_mlp_head(), MDNHead
+    seq_encoders.py    # GRUSeqEncoder, TransformerSeqEncoder
+    batter_history.py  # HierarchicalGRUBatterHistoryEncoder
+    head_strategies.py # IndependentHeadStrategy, CascadeHeadStrategy
+```
 
 ---
 
-## 共通構造
+## 全体構造
 
-すべてのモデルは **埋め込み → バックボーン → マルチヘッド** の3段構成です。
+すべてのモデルは `ComposableModel` が以下のコンポーネントを YAML に基づいて組み立てます。
 
-```
-入力
- ├─ カテゴリカル特徴量 ──→ [Embedding] ─┐
- ├─ 連続値特徴量 ──────────────────────┤──→ concat ──→ [Backbone] ──→ h
- └─ 順序特徴量 ────────────────────────┘                              │
-                                                                    ├─→ swing_attempt  (B,)    logits
-                                                                    ├─→ swing_result   (B, 9)  logits
-                                                                    ├─→ bb_type        (B, 4)  logits
-                                                                    └─→ regression     (B, 3)  values
-```
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 8px 4px;">
+<tr>
+  <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">カテゴリカル特徴量</td>
+  <td rowspan="3" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
+  <td rowspan="3" style="background:#e3f2fd; border:2px solid #42a5f5; border-radius:8px; padding:8px 14px; text-align:center;"><b>Embedding</b></td>
+  <td rowspan="5" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0 6px;">→ <i>concat</i> →</td>
+  <td rowspan="5" style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>Backbone</b><br><sub>DNN / ResDNN</sub></td>
+  <td rowspan="5" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
+  <td rowspan="5" style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:10px 16px; text-align:center;"><b>HeadStrategy</b><br><sub>Independent / Cascade</sub></td>
+</tr>
+<tr><td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">連続値特徴量</td></tr>
+<tr><td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">順序特徴量</td></tr>
+<tr>
+  <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">過去投球系列 <i>(opt)</i></td>
+  <td style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
+  <td style="background:#f3e5f5; border:2px solid #ab47bc; border-radius:8px; padding:10px 16px; text-align:center;"><b>SeqEncoder</b></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">打者履歴 <i>(opt)</i></td>
+  <td style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
+  <td style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center;"><b>BatterHistEncoder</b></td>
+</tr>
+</table>
+</div>
 
-### 出力（全モデル共通）
+### 出力（全構成共通）
 
 | キー | 形状 | 内容 |
 |---|---|---|
 | `swing_attempt` | `(B,)` | スイング試行 logit (binary) |
-| `swing_result` | `(B, 9)` | スイング結果 logits (9 クラス) |
-| `bb_type` | `(B, 4)` | 打球タイプ logits (4 クラス) |
-| `regression` | `(B, 3)` | launch_speed, launch_angle, hit_distance_sc |
+| `swing_result` | `(B, num_swing_result)` | スイング結果 logits |
+| `bb_type` | `(B, num_bb_type)` | 打球タイプ logits |
+| `regression` | `(B, 3)` or `dict` | launch_speed, launch_angle, hit_distance_sc（MDN の場合は `pi`, `mu`, `sigma` の dict） |
 
 ---
 
-## 1. atbat_dnn
+## コンポーネント詳細
 
-**シンプルな全結合ネットワーク。** ベースラインモデル。
+### 1. FeatureEmbedding (`components/embedding.py`)
 
-```
-Embedding concat
-      │
-      ▼
-┌────────────────────┐
-│ Linear(in, 256)    │
-│ BatchNorm1d        │
-│ ReLU               │╮
-│ Dropout            ││ × backbone_num_layers (default 3)
-└────────────────────┘│
-      │ ◄─────────────╯
-      ▼
-┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
-│ SA Head  │ │ SR Head  │ │ BT Head  │ │ Reg Head │
-│ Lin→1    │ │ Lin→9    │ │ Lin→4    │ │ Lin→3    │
-└──────────┘ └──────────┘ └──────────┘ └──────────┘
-```
+カテゴリカル特徴量を Embedding し、連続値・序数特徴量と concat する。全モデル構成で共通。
 
-- **バックボーン**: `Linear → BatchNorm1d → ReLU → Dropout` を `backbone_num_layers` 回スタック
-- **ヘッド**: 各出力タスクに独立した `Linear` レイヤー
-- **設定例**: `configs/dnn.yaml`
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 4px 3px;">
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">p_throws</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding(3, 2)</td>
+  <td rowspan="8" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0 6px;">→ <i>concat</i> →</td>
+  <td rowspan="8" style="background:#fffde7; border:2px solid #fdd835; border-radius:8px; padding:8px 14px; text-align:center; font-size:13px;"><b>(B, embed_dim<br>+ num_cont<br>+ num_ord)</b></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">pitch_type</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding(19, 8)</td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">batter</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding(784, 16)</td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">stand</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding(3, 2)</td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">base_out_state</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding(25, 8)</td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">count_state</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding(13, 4)</td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">cont (15)</td>
+  <td colspan="2" style="border:none;"></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">ord (4)</td>
+  <td colspan="2" style="border:none;"></td>
+</tr>
+</table>
+</div>
 
----
-
-## 2. atbat_dnn_mdn
-
-**DNN + 混合密度ネットワーク (MDN)。** 回帰ヘッドのみ MDN に置き換え。
-
-```
-Embedding concat
-      │
-      ▼
-┌────────────────────┐
-│ Linear → BN → ReLU │ × backbone_num_layers
-│ → Dropout          │
-└────────────────────┘
-      │
-      ├─→ SA Head  (Linear → 1)
-      ├─→ SR Head  (Linear → 9)
-      ├─→ BT Head  (Linear → 4)
-      │
-      └─→ MDN Head
-           ├─→ π (mixing coefficients)  : Linear → K → Softmax
-           ├─→ μ (means)                : Linear → K × 3
-           └─→ σ (std deviations)       : Linear → K × 3 → ELU+1+ε
-```
-
-- **MDN ヘッド**: K 個のガウス分布の混合で回帰ターゲットをモデル化
-- **推論時**: 最大重み成分の μ を予測値として採用
-- **設定例**: `configs/dnn_mdn.yaml`（`mdn_num_components` で K を指定）
-
----
-
-## 3. atbat_resdnn
-
-**残差接続付き DNN。** ResBlock と ProjectedResBlock で勾配流を安定化。
-
-```
-Embedding concat ──→ Input Projection (Linear → LN → GELU)
-      │
-      ▼
-┌─────────────────────────────────────────────┐
-│              ResBlock / ProjectedResBlock   │
-│  ┌─────────┐                                │
-│  │ Input h │───────────────────┐ (skip)     │
-│  └────┬────┘                   │            │
-│       ▼                        │            │
-│  Linear → LN → GELU → Dropout  │            │
-│       ▼                        │            │
-│  Linear → LN                   │            │
-│       ▼                        ▼            │
-│     h_out  ────────────────→  (+) ──→ GELU  │
-│                                             │
-│  ※ ProjectedResBlock: skip 側にも Linear→LN  │
-└─────────────────────────────────────────────┘
-      │  × backbone_num_layers
-      ▼
-┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
-│ SA Head  │ │ SR Head  │ │ BT Head  │ │ Reg Head │
-│Lin→GELU  │ │Lin→GELU  │ │Lin→GELU  │ │Lin→GELU  │
-│→Lin→1    │ │→Lin→9    │ │→Lin→4    │ │→Lin→3    │
-└──────────┘ └──────────┘ └──────────┘ └──────────┘
-```
-
-- **入力投影**: 埋め込み結合後の次元を `backbone_hidden` に統一
-- **ResBlock**: 次元が同一の場合。`Linear→LN→GELU→Dropout→Linear→LN + skip → GELU`
-- **ProjectedResBlock**: 次元が異なる場合。skip 接続に射影 `Linear→LN` を挿入
-- **ヘッド**: 2 層 MLP (`Linear→GELU→Linear`)
-- **設定例**: `configs/resdnn.yaml`
+- Embedding の `padding_idx` = `num_classes`（不正値の吸収用）
+- 不正値（-1 や range 外）は自動的に `padding_idx` にマッピング
 
 ---
 
-## 4. atbat_resdnn_cascade
+### 2. Backbone (`components/backbones.py`)
 
-**カスケードヘッド付き ResBlock DNN。** ヘッド間に因果的依存関係を導入。
+YAML の `backbone_type` で選択。
 
-```
-Embedding concat ──→ Input Projection ──→ ResBlock × N ──→ h
-                                                           │
-          ┌────────────────────────────────────────────────┘
-          │
-          ▼
-    ┌────────────┐
-    │  SA Head   │──→ swing_attempt logit (sa)
-    │ Lin→GELU   │
-    │ →Lin→1     │
-    └─────┬──────┘
-          │ concat [h, sa]
-          ▼
-    ┌────────────┐
-    │  SR Head   │──→ swing_result logits (sr)
-    │ Lin→GELU   │
-    │ →Lin→9     │
-    └─────┬──────┘
-          │ concat [h, sr]
-          ▼
-    ┌────────────┐
-    │  BT Head   │──→ bb_type logits (bt)
-    │ Lin→GELU   │
-    │ →Lin→4     │
-    └─────┬──────┘
-          │ concat [h, bt]
-          ▼
-    ┌────────────┐
-    │  Reg Head  │──→ regression (3)
-    │ Lin→GELU   │
-    │ →Lin→3     │
-    └────────────┘
-```
+#### `dnn` — DNN Backbone
+
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 4px 0;">
+<tr>
+  <td style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>Linear</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>BatchNorm1d</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>ReLU</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>Dropout</b></td>
+  <td style="border:none; color:#546e7a; padding-left:8px;">× len(backbone_hidden)</td>
+</tr>
+</table>
+</div>
+
+- シンプルな全結合レイヤーのスタック
+- `backbone_hidden: [512, 256, 128]` で 3 層
+
+#### `resdnn` — ResBlock Backbone
+
+<div align="center">
+<table style="border:2px solid #66bb6a; border-radius:12px; border-collapse:collapse; background:#fafafa;">
+<tr>
+  <td colspan="3" style="background:#e8f5e9; border-bottom:1px solid #c8e6c9; padding:6px 16px; text-align:center; border-radius:10px 10px 0 0;">
+    &laquo;block&raquo; <b>ResBlock / ProjectedResBlock</b>
+  </td>
+</tr>
+<tr>
+  <td style="padding:12px 16px; text-align:center; border:none; vertical-align:top; width:45%;">
+    <b>Main path</b><br>
+    <span style="background:#e8f5e9; border:1px solid #a5d6a7; border-radius:4px; padding:2px 8px; display:inline-block; margin:4px 0; font-size:13px;">Linear → LN → GELU → Dropout</span><br>↓<br>
+    <span style="background:#e8f5e9; border:1px solid #a5d6a7; border-radius:4px; padding:2px 8px; display:inline-block; margin:4px 0; font-size:13px;">Linear → LN</span>
+  </td>
+  <td style="border-left:1px dashed #c8e6c9; border-right:1px dashed #c8e6c9; padding:12px 8px; text-align:center; vertical-align:middle; font-size:24px; font-weight:bold; color:#66bb6a;">
+    ＋
+  </td>
+  <td style="padding:12px 16px; text-align:center; border:none; vertical-align:top; width:45%;">
+    <b>Skip path</b><br>
+    <span style="background:#e8f5e9; border:1px solid #a5d6a7; border-radius:4px; padding:2px 8px; display:inline-block; margin:4px 0; font-size:13px;">Identity</span><br>
+    <sub>(ProjectedResBlock の場合:<br>Linear → LN)</sub>
+  </td>
+</tr>
+<tr>
+  <td colspan="3" style="background:#e8f5e9; border-top:1px solid #c8e6c9; padding:6px 16px; text-align:center; border-radius:0 0 10px 10px;">
+    → <b>GELU</b> → output
+  </td>
+</tr>
+</table>
+</div>
+
+- **ResBlock**: 入力と出力の次元が同一の場合
+- **ProjectedResBlock**: 次元が異なる場合。skip 接続に射影 `Linear` を挿入
+- `backbone_hidden: [512, 512, 256, 256, 128]` で 5 ブロック
+
+---
+
+### 3. Head Strategy (`components/head_strategies.py`)
+
+YAML の `head_strategy` で選択。
+
+#### `independent` — 独立ヘッド（デフォルト）
+
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 8px 6px;">
+<tr>
+  <td rowspan="4" style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center; vertical-align:middle;"><b>backbone<br>output h</b></td>
+  <td rowspan="4" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px; vertical-align:middle;">→</td>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>MLP</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">swing_attempt <code>(B,)</code></td>
+</tr>
+<tr>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>MLP</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">swing_result <code>(B, 9)</code></td>
+</tr>
+<tr>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>MLP</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">bb_type <code>(B, 4)</code></td>
+</tr>
+<tr>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>MLP / MDN</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression <code>(B, 3)</code></td>
+</tr>
+</table>
+</div>
+
+全ヘッドが backbone 出力を独立に受け取る。
+
+#### `cascade` — カスケードヘッド
+
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 4px 2px;">
+<tr>
+  <td style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>h</b> <sub>(backbone output)</sub></td>
+  <td style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>SA Head</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">swing_attempt</td>
+</tr>
+<tr><td colspan="5" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0;">↓ concat [h, sa_logit]</td></tr>
+<tr>
+  <td colspan="2" style="border:none;"></td>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>SR Head</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">swing_result</td>
+</tr>
+<tr><td colspan="5" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0;">↓ concat [h, sr_logit]</td></tr>
+<tr>
+  <td colspan="2" style="border:none;"></td>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>BT Head</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">bb_type</td>
+</tr>
+<tr><td colspan="5" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0;">↓ concat [h, bt_logit]</td></tr>
+<tr>
+  <td colspan="2" style="border:none;"></td>
+  <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>Reg Head</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression</td>
+</tr>
+</table>
+</div>
 
 - **カスケードの流れ**: `h → SA → [h,sa] → SR → [h,sr] → BT → [h,bt] → Reg`
-- **`detach_cascade`**: `True` にすると上流ヘッドからの勾配を `detach` し、下流ヘッド学習時に上流を更新しない
-- **設計意図**: スイング試行 → スイング結果 → 打球タイプ → 回帰値 という野球の因果構造を反映
-- **設定例**: `configs/resdnn_cascade.yaml`（`detach_cascade: true` / `resdnn_focal.yaml`）
+- **`detach_cascade`**: `true` にすると上流ヘッドからの勾配を `detach` し、下流ヘッド学習時に上流を更新しない
+- **設計意図**: スイング試行 → スイング結果 → 打球タイプ → 回帰値 という因果構造を反映
 
 ---
 
-## 5. atbat_seq_resdnn
+### 4. Regression Head Type
 
-**打席内系列エンコーダ付き ResBlock DNN。** 同一打席の過去投球情報を活用。
+YAML の `regression_head_type` で選択。
 
-```
-過去投球系列 (T 球分)                       現在の投球
-─────────────────────                    ─────────────────
-seq_pitch_type ──→ [Embed] ─┐            cat ──→ [Embed] ─┐
-seq_swing_result → [Embed] ─┤            cont ────────────┤
-seq_cont ───────────────────┤            ord ─────────────┘
-seq_swing_attempt ──────────┘                    │
-         │                                       │
-    concat (T, D_seq)                    Embedding concat
-         │                                       │
-         ▼                                       │
-┌────────────────┐                               │
-│  系列エンコーダ  │                               │
-│  GRU or        │                               │
-│  Transformer   │                               │
-└───────┬────────┘                               │
-        │                                        │
-        │ seq_embedding                          │
-        └──────────────┬─────────────────────────┘
-                       │
-                    concat ──→ Projection
-                                   │
-                                   ▼
-                             ResBlock × N
-                                   │
-                      ┌─────┬──────┼──────┐
-                      ▼     ▼      ▼      ▼
-                     SA    SR     BT    Reg
-```
+#### `mlp`（デフォルト）
 
-### 系列エンコーダの選択
+通常の MLP ヘッド。出力 `(B, 3)`。
 
-#### GRU エンコーダ (`seq_encoder_type: gru`)
+#### `mdn` — Mixture Density Network
 
-```
-input (B, T, D_seq)  ──→ pack_padded_sequence (seq_mask で実長算出)
-                              │
-                              ▼
-                         nn.GRU
-                         (hidden_size = seq_hidden_dim)
-                         (num_layers = seq_num_layers)
-                         (bidirectional = seq_bidirectional)
-                              │
-                              ▼
-                         h_n[-1] or cat(h_n[-2:])  ──→ seq_embedding
-```
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 6px 4px;">
+<tr>
+  <td rowspan="3" style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center; vertical-align:middle;"><b>backbone_out</b></td>
+  <td rowspan="3" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px; vertical-align:middle;">→</td>
+  <td rowspan="3" style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:10px 16px; text-align:center; vertical-align:middle;"><b>Shared MLP</b></td>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fff3e0; border:1px solid #ffe0b2; border-radius:6px; padding:4px 10px; font-size:13px; text-align:center;">fc_pi → <b>Softmax</b></td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>π</b> (B, K) 混合係数</td>
+</tr>
+<tr>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fff3e0; border:1px solid #ffe0b2; border-radius:6px; padding:4px 10px; font-size:13px; text-align:center;">fc_mu → <b>reshape</b></td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>μ</b> (B, K, 3) 平均</td>
+</tr>
+<tr>
+  <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
+  <td style="background:#fff3e0; border:1px solid #ffe0b2; border-radius:6px; padding:4px 10px; font-size:13px; text-align:center;">fc_sigma → <b>Softplus</b></td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>σ</b> (B, K, 3) 標準偏差</td>
+</tr>
+</table>
+</div>
 
-- 可変長系列に `pack_padded_sequence` で対応
+- K 個のガウス分布の混合で回帰ターゲットをモデル化
+- `mdn_num_components` で K を指定
+- 推論時: `E[y] = Σ_k π_k * μ_k` を点推定として採用
+
+---
+
+### 5. Sequence Encoder (`components/seq_encoders.py`)
+
+`max_seq_len > 0` のとき有効化。YAML の `seq_encoder_type` で選択。
+
+同一打席内の過去投球系列をエンコードする。
+
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 4px 3px;">
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">seq_pitch_type</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding</td>
+  <td rowspan="4" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0 6px;">→ <i>concat</i> →</td>
+  <td rowspan="4" style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; vertical-align:middle;"><b>(B, T, D_seq)</b></td>
+  <td rowspan="4" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px; vertical-align:middle;">→</td>
+  <td rowspan="4" style="background:#f3e5f5; border:2px solid #ab47bc; border-radius:8px; padding:10px 16px; text-align:center; vertical-align:middle;"><b>Encoder</b></td>
+  <td rowspan="4" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px; vertical-align:middle;">→</td>
+  <td rowspan="4" style="background:#fffde7; border:2px solid #fdd835; border-radius:8px; padding:8px 14px; text-align:center; font-size:13px; vertical-align:middle;"><b>(B, seq_out_dim)</b></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">seq_swing_result</td>
+  <td style="border:none; color:#546e7a;">→</td>
+  <td style="background:#e3f2fd; border:1px solid #42a5f5; border-radius:6px; padding:3px 8px; font-size:13px;">Embedding</td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">seq_cont</td>
+  <td colspan="2" style="border:none;"></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">seq_swing_attempt</td>
+  <td colspan="2" style="border:none;"></td>
+</tr>
+</table>
+</div>
+
+#### `gru` — GRU エンコーダ
+
+- `pack_padded_sequence` で可変長系列に対応
 - 双方向時は最終隠れ状態の forward/backward を concat
-- **過去投球がない場合**（打席1球目）: ゼロベクトルを返却
+- 過去投球がない場合はゼロベクトル
 
-#### Transformer エンコーダ (`seq_encoder_type: transformer`)
+#### `transformer` — Transformer エンコーダ
 
-```
-input (B, T, D_seq)  ──→ Linear(D_seq → seq_hidden_dim)
-                              │
-                              ▼
-                    TransformerEncoderLayer × seq_num_layers
-                    (nhead=4, dim_feedforward=seq_hidden_dim×4)
-                    (src_key_padding_mask = ~seq_mask)
-                              │
-                              ▼
-                    masked mean pooling ──→ seq_embedding
-```
-
+- `Linear` で入力を `seq_hidden_dim` に射影後、`TransformerEncoder` で処理
 - `src_key_padding_mask` でパディング位置をマスク
-- 出力をマスク付き平均プーリングで固定長ベクトル化
-- **過去投球がない場合**: ゼロベクトルを返却
-
-### 設定
-
-```yaml
-model:
-  architecture: atbat_seq_resdnn
-  max_seq_len: 10              # 過去投球の最大系列長
-  seq_encoder_type: gru        # "gru" or "transformer"
-  seq_hidden_dim: 64           # エンコーダ隠れ層次元
-  seq_num_layers: 1            # エンコーダ層数
-  seq_bidirectional: false     # GRU のみ: 双方向フラグ
-```
-
-- **設定例**: `configs/seq_resdnn.yaml`
+- マスク付き平均プーリングで固定長ベクトル化
 
 ---
 
-## 6. atbat_seq_resdnn_batter_hist
+### 6. Batter History Encoder (`components/batter_history.py`)
 
-**打者履歴エンコーダ付き系列 ResBlock DNN。** `atbat_seq_resdnn` を拡張し、打者の直近 N 打席（デフォルト50打席）の Statcast 全投球データを階層 GRU でエンコードして予測に利用する。「この打者は最近どのような投球にどう反応してきたか」という傾向をモデルに伝えることが目的。
+`batter_hist_max_atbats > 0` のとき有効化。`max_seq_len > 0`（SeqEncoder 有効）が前提。
 
-### 全体構造
+打者の直近 N 打席の Statcast 全投球データを階層 GRU でエンコードする。
 
-モデルは 3 つの独立したエンコーダの出力を結合して予測する。
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 4px 3px;">
+<tr>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; padding:4px 0;"><b>過去 N 打席 × 各最大 P 球</b></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">hist_pitch_type (B,N,P) → <i>Emb 共有</i></td>
+  <td rowspan="4" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0 6px;">→<br><i>concat</i><br>→</td>
+  <td rowspan="4" style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center; vertical-align:middle;"><b>Inner GRU</b><br><sub>(B*N, P, D) → h_n[-1]<br>→ (B*N, D_inner)</sub></td>
+</tr>
+<tr><td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">hist_cont (B,N,P,15)</td></tr>
+<tr><td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">hist_swing_attempt (B,N,P)</td></tr>
+<tr><td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">hist_swing_result (B,N,P) → <i>Emb 共有</i></td></tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ reshape → (B, N, D_inner)</td>
+</tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
+    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1)</span>
+  </td>
+</tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 6)</td>
+</tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
+    <span style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center; display:inline-block; padding:8px 20px;"><b>Outer GRU</b> → h_n[-1] → <b>(B, D_hist_out)</b></span>
+  </td>
+</tr>
+</table>
+</div>
 
-```
-═══════════════════════════════════════════════════════════════════════════════════
-  (A) 打者履歴エンコーダ          (B) 打席内系列エンコーダ      (C) 現在の投球
-═══════════════════════════════════════════════════════════════════════════════════
+- **Inner GRU**: 各打席の投球列を 1 本の打席ベクトルに圧縮
+- **Outer GRU**: N 打席分の打席ベクトル列を時系列処理して打者の傾向ベクトルに圧縮
+- `pitch_type` / `swing_result` の Embedding は SeqEncoder と **重みを共有**
+- 投球がない打席・履歴がない打者はゼロベクトル
 
-  過去 N 打席 × 各最大 P 球      同一打席の過去 T 球         カテゴリカル / 連続値 / 順序
-  ──────────────────────       ────────────────         ─────────────────────
+---
 
-  [投球レベル: 各球ごと]         seq_pitch_type (T,)      pitch_type, stand,
-  hist_pitch_type (N,P)        seq_cont (T,15)          batter, p_throws,
-  hist_cont (N,P,15)           seq_swing_attempt (T,)   base_out_state, ...
-  hist_swing_attempt (N,P)     seq_swing_result (T,)    release_speed, ...
-  hist_swing_result (N,P)             │                        │
-         │                            ▼                        ▼
-         ▼                     ┌─────────────┐          ┌───────────┐
-  ┌─────────────┐              │ GRU /       │          │ Embedding │
-  │  Inner GRU  │              │ Transformer │          │  concat   │
-  │  (B*N,P,D)  │              └──────┬──────┘          └─────┬─────┘
-  └──────┬──────┘                     │                       │
-         │ h_n[-1]                    │                       │
-         ▼                            │                       │
-  [打席レベル: 各打席ごと]               │                       │
-  + bb_type_emb (打球種別)             │                       │
-  + launch_speed (打球速度)            │                       │
-  + launch_angle (打球角度)            │                       │
-         │                            │                       │
-         │ (B, N, D_ab)               │                       │
-         ▼                            │                       │
-  ┌─────────────┐                     │                       │
-  │  Outer GRU  │                     │                       │
-  │  (B,N,D_ab) │                     │                       │
-  └──────┬──────┘                     │                       │
-         │ h_n[-1]                    │                       │
-         ▼                            ▼                       ▼
-    batter_hist_emb              seq_embedding          pitch_embedding
-         │                            │                       │
-         └────────────────────────────┴───────────────────────┘
-                                      │
-                                   concat
-                                      │
-                                      ▼
-                               ProjectedResBlock
-                                      │
-                                ResBlock × L
-                                      │
-                         ┌──────┬─────┴─────┬──────┐
-                         ▼      ▼           ▼      ▼
-                        SA     SR          BT    Reg
-```
+## YAML 設定
 
-### 入力データの詳細
+### モデル設定フィールド一覧
 
-#### (A) 打者履歴エンコーダへの入力
-
-打者の **当該試合より前** の直近 N 打席（デフォルト50打席）の全投球データ。同一 `(batter, game_pk)` の全サンプルは同じ履歴を共有する。データは `batter_game_history.parquet` から事前構築される。
-
-##### 投球レベル特徴量（Inner GRU 入力）— 各打席の各球ごと
-
-| テンソル | 形状 | 内容 |
-|----------|------|------|
-| `hist_pitch_type` | `(B, N, P)` | 球種 ID → Embedding (打席内系列エンコーダと **共有**) |
-| `hist_cont` | `(B, N, P, 15)` | 15 次元の連続値特徴量（正規化済み、下表参照） |
-| `hist_swing_attempt` | `(B, N, P)` | スイング試行フラグ (0/1) |
-| `hist_swing_result` | `(B, N, P)` | スイング結果 ID → Embedding (打席内系列エンコーダと **共有**) |
-
-`hist_cont` に含まれる 15 特徴量:
-
-| 特徴量 | 説明 | カテゴリ |
-|--------|------|---------|
-| `release_speed` | 球速 (mph) | 球速 |
-| `release_spin_rate` | 回転数 (rpm) | 回転 |
-| `pfx_x` | 水平変化量 (ft) | 軌道・変化 |
-| `pfx_z` | 垂直変化量 (ft) | 軌道・変化 |
-| `vx0` | リリース時 X 方向速度 | 軌道・変化 |
-| `vy0` | リリース時 Y 方向速度 | 軌道・変化 |
-| `vz0` | リリース時 Z 方向速度 | 軌道・変化 |
-| `ax` | X 方向加速度 | 軌道・変化 |
-| `ay` | Y 方向加速度 | 軌道・変化 |
-| `az` | Z 方向加速度 | 軌道・変化 |
-| `plate_x` | プレート通過時の水平位置 (ft) | 通過位置 |
-| `plate_z` | プレート通過時の垂直位置 (ft) | 通過位置 |
-| `sz_top` | ストライクゾーン上端 (ft) | ゾーン |
-| `sz_bot` | ストライクゾーン下端 (ft) | ゾーン |
-| `plate_z_norm` | ゾーン正規化済み垂直通過位置 | 通過位置 |
-
-Inner GRU への実際の入力ベクトル（1 投球あたり）:
-
-```
-[pitch_type_emb(D_pt), cont(15), swing_attempt(1), swing_result_emb(4)]
- → 合計: D_pt + 15 + 1 + 4 = D_pt + 20 次元
-```
-
-##### 打席レベル特徴量（Inner→Outer 間で結合）— 各打席の最終結果
-
-| テンソル | 形状 | 内容 |
-|----------|------|------|
-| `hist_bb_type` | `(B, N)` | 打球種別 ID (ground_ball / line_drive / fly_ball / popup) → Embedding (dim=4) |
-| `hist_launch_speed` | `(B, N)` | 打球速度 (正規化済み、打球なしの場合は 0) |
-| `hist_launch_angle` | `(B, N)` | 打球角度 (正規化済み、打球なしの場合は 0) |
-
-これらは **投球単位ではなく打席単位** の情報であり、Inner GRU が投球列を処理した **後** に打席ベクトルへ結合される。
-
-#### (B) 打席内系列エンコーダへの入力
-
-現在の打席における **今の投球より前** の投球列（最大 T=10 球）。`atbat_seq_resdnn` と同一。
-
-| テンソル | 形状 | 内容 |
-|----------|------|------|
-| `seq_pitch_type` | `(B, T)` | 球種 ID → Embedding |
-| `seq_cont` | `(B, T, 15)` | 連続値 15 次元 (上記と同一) |
-| `seq_swing_attempt` | `(B, T)` | スイング試行フラグ |
-| `seq_swing_result` | `(B, T)` | スイング結果 ID → Embedding |
-| `seq_mask` | `(B, T)` | 有効投球マスク |
-
-#### (C) 現在の投球の特徴量
-
-予測対象である現在の 1 球の特徴量。
-
-| 種別 | 特徴量 |
-|------|--------|
-| カテゴリカル (Embedding) | `pitch_type`, `p_throws`, `batter`, `stand`, `base_out_state`, `count_state` |
-| 連続値 | 上記 15 特徴量と同一 |
-| 順序値 | `inning_clipped`, `is_inning_top`, `diff_score_clipped`, `pitch_number_clipped` |
-
-### 階層 GRU アーキテクチャの詳細
-
-#### Inner GRU（投球レベル → 打席ベクトル）
-
-各過去打席内の投球系列（最大 P 球）を 1 本の打席ベクトルに圧縮する。B×N 打席分を `(B*N, P, D)` に reshape してバッチ処理。`pitch_type` / `swing_result` の Embedding は打席内系列エンコーダと **重みを共有** する。
-
-```
-hist_pitch_type (B*N, P)     ─→ Embedding (shared) ──┐
-hist_cont (B*N, P, 15)      ─────────────────────────┤
-hist_swing_attempt (B*N, P) ─────────────────────────┼─→ concat ─→ GRU(1層) ─→ h_n[-1]
-hist_swing_result (B*N, P)  ─→ Embedding (shared) ───┘                        (B*N, D_inner)
-```
-
-- `pack_padded_sequence` で可変長に対応（`hist_pitch_mask` から実長を算出）
-- 投球がない打席はゼロベクトル
-
-#### Inner→Outer 間の打席ベクトル構成
-
-Inner GRU 出力に **打席の最終結果** を結合して完全な打席ベクトルを作る。`bb_type` / `launch_speed` / `launch_angle` は投球単位ではなく打席単位の情報であるため、ここで注入する。
-
-```
-inner_gru_out (D_inner)  ──┐
-bb_type_emb (4)         ───┼─→ concat ─→ atbat_vec (B, N, D_inner + 4 + 2)
-launch_speed (1)        ───┤
-launch_angle (1)        ───┘
-```
-
-**設計意図**: 投球経過（球筋・スイング反応の時系列）と打席最終結果（打球の質）を分離してエンコードすることで、「どんな投球列を経て、どんな結果になったか」を構造的に表現する。
-
-#### Outer GRU（打席ベクトル列 → 打者履歴ベクトル）
-
-N 打席分の打席ベクトル列を時系列として処理し、打者の傾向を固定長ベクトルに圧縮する。
-
-```
-atbat_vecs (B, N, D_atbat_vec) ─→ pack_padded_sequence
-                                       │
-                                       ▼
-                                  GRU(num_layers層)
-                                       │
-                                       ▼
-                                  h_n[-1] ─→ batter_hist_emb (B, D_hist_out)
-```
-
-- `hist_atbat_mask` で有効な打席のみを処理
-- 履歴がない打者はゼロベクトル
-
-### Embedding 共有の構造
-
-| Embedding 層 | 打席内系列エンコーダ (B) | 打者履歴 Inner GRU (A) | 備考 |
+| フィールド | デフォルト | 選択肢 | 説明 |
 |---|---|---|---|
-| `seq_pitch_type_embed` | ✅ 使用 | ✅ 使用 | **共有**: 同一の重みで球種を埋め込む |
-| `seq_swing_result_embed` | ✅ 使用 | ✅ 使用 | **共有**: 同一の重みでスイング結果を埋め込む |
-| `hist_bb_type_embed` | — | ✅ 使用 | **専用**: 打者履歴の打席レベルでのみ使用 |
+| `backbone_type` | `"resdnn"` | `"dnn"`, `"resdnn"` | Backbone の種類 |
+| `backbone_hidden` | `[512, 256, 128]` | — | 各層の隠れ次元 |
+| `dropout` | `0.2` | — | Dropout 率 |
+| `head_strategy` | `"independent"` | `"independent"`, `"cascade"` | ヘッド接続戦略 |
+| `head_hidden` | `[64]` | — | ヘッド MLP の隠れ次元 |
+| `head_activation` | `"gelu"` | `"relu"`, `"gelu"` | ヘッド MLP の活性化関数 |
+| `detach_cascade` | `true` | — | cascade 時に上流勾配を detach |
+| `regression_head_type` | `"mlp"` | `"mlp"`, `"mdn"` | 回帰ヘッドの種類 |
+| `mdn_num_components` | `5` | — | MDN のガウス成分数 |
+| `max_seq_len` | `0` | — | 0: 無効、>0: 投球系列エンコーダ有効 |
+| `seq_encoder_type` | `"gru"` | `"gru"`, `"transformer"` | 系列エンコーダの種類 |
+| `seq_hidden_dim` | `64` | — | 系列エンコーダの隠れ次元 |
+| `seq_num_layers` | `1` | — | 系列エンコーダの層数 |
+| `seq_bidirectional` | `false` | — | GRU のみ: 双方向フラグ |
+| `batter_hist_max_atbats` | `0` | — | 0: 無効、>0: 打者履歴エンコーダ有効 |
+| `batter_hist_max_pitches` | `10` | — | 各打席の最大投球数 |
+| `batter_hist_hidden_dim` | `64` | — | 打者履歴 GRU の隠れ次元 |
+| `batter_hist_num_layers` | `1` | — | Outer GRU の層数 |
 
-`pitch_type` と `swing_result` の Embedding を共有することで、パラメータ数を抑えつつ、同一の球種・スイング結果に対して一貫した表現を学習する。
+### 設定例
 
-### 設定
+#### シンプルな DNN（ベースライン）
 
 ```yaml
-data:
-  batter_history_dir: /workspace/datasets/statcast-customized/batter_history
-
 model:
-  architecture: atbat_seq_resdnn_batter_hist
+  backbone_type: dnn
+  backbone_hidden: [512, 256, 128]
+  head_hidden: [64]
+  head_activation: relu
+  dropout: 0.2
+```
+
+#### DNN + MDN 回帰ヘッド
+
+```yaml
+model:
+  backbone_type: dnn
+  backbone_hidden: [512, 256, 128]
+  head_hidden: [64]
+  head_activation: relu
+  dropout: 0.2
+  regression_head_type: mdn
+  mdn_num_components: 5
+```
+
+#### ResBlock DNN
+
+```yaml
+model:
+  backbone_type: resdnn
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2
-
-  # 打席内系列エンコーダ
-  max_seq_len: 10              # 同一打席内の過去投球の最大系列長
-  seq_encoder_type: gru        # "gru" or "transformer"
-  seq_hidden_dim: 64           # エンコーダ隠れ層次元
-  seq_num_layers: 1            # エンコーダ層数
-  seq_bidirectional: false     # GRU のみ: 双方向フラグ
-
-  # 打者履歴エンコーダ
-  batter_hist_max_atbats: 50   # 遡る過去打席数 (N)
-  batter_hist_max_pitches: 10  # 各打席の最大投球数 (P)
-  batter_hist_hidden_dim: 64   # Inner/Outer GRU 隠れ層次元
-  batter_hist_num_layers: 1    # Outer GRU 層数 (Inner は常に 1 層)
 ```
 
-- **設定例**: `configs/seq_resdnn_batter_hist.yaml`
-- **必要なデータ**: `batter_history_dir` に `batter_game_history.parquet` と `atbat_row_indices.parquet` が必要（`scripts/add_game_info_and_rebuild.py` で生成）
-- **データ分割**: 時系列分割が必須（将来のデータが履歴に混入するリークを防止）
-- **データリーク防止**: 打者履歴は「当該試合より前」の打席のみを含む。同一試合内の打席は含まれない
+#### ResBlock DNN + カスケードヘッド
+
+```yaml
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  head_strategy: cascade
+  detach_cascade: true
+```
+
+#### ResBlock DNN + GRU 系列エンコーダ
+
+```yaml
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  max_seq_len: 10
+  seq_encoder_type: gru
+  seq_hidden_dim: 64
+  seq_num_layers: 1
+  seq_bidirectional: false
+```
+
+#### ResBlock DNN + GRU 系列 + 打者履歴
+
+```yaml
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  max_seq_len: 10
+  seq_encoder_type: gru
+  seq_hidden_dim: 64
+  seq_num_layers: 1
+  seq_bidirectional: false
+  batter_hist_max_atbats: 50
+  batter_hist_max_pitches: 10
+  batter_hist_hidden_dim: 64
+  batter_hist_num_layers: 1
+```
+
+#### 新しい組み合わせ例: ResBlock + カスケード + MDN
+
+```yaml
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  head_strategy: cascade
+  regression_head_type: mdn
+  mdn_num_components: 5
+```
 
 ---
 
-## モデルの追加方法
+## コンポーネントの追加方法
 
-### 1. モデルファイルを作成
+### 新しい Backbone を追加
 
-`src/models/` に Python ファイルを作成します。
+`components/backbones.py` にクラスを追加し、レジストリに登録する。
 
 ```python
-# src/models/my_model.py
-import torch
-import torch.nn as nn
-
-from config import ModelConfig
-from models import register_model
-
-
-@register_model("my_model")
-class MyModel(nn.Module):
-
-    def __init__(self, cfg: ModelConfig, num_cont: int, num_ord: int):
+@register_backbone("my_backbone")
+class MyBackbone(nn.Module):
+    def __init__(self, input_dim: int, hidden_dims: list[int], dropout: float):
         super().__init__()
-        # cfg.embedding_dims, cfg.backbone_hidden 等を使ってネットワークを構築
+        ...
+        self._output_dim = ...
+
+    @property
+    def output_dim(self) -> int:
+        return self._output_dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        ...
+```
+
+YAML で `backbone_type: my_backbone` を指定するだけで利用可能。
+
+### 新しい Sequence Encoder を追加
+
+`components/seq_encoders.py` にクラスを追加し、レジストリに登録する。
+
+```python
+@register_seq_encoder("my_encoder")
+class MySeqEncoder(BaseSeqEncoder):
+    def __init__(self, cfg: ModelConfig, num_cont: int):
+        super().__init__(cfg, num_cont)
+        ...
+        self._output_dim = ...
+
+    @property
+    def output_dim(self) -> int:
+        return self._output_dim
+
+    def forward(self, seq_pitch_type, seq_cont, seq_swing_attempt,
+                seq_swing_result, seq_mask) -> torch.Tensor:
+        ...
+```
+
+YAML で `seq_encoder_type: my_encoder` を指定するだけで利用可能。
+
+### 新しい Head Strategy を追加
+
+`components/head_strategies.py` に追加し、`HEAD_STRATEGY_REGISTRY` に登録する。
+
+```python
+class MyHeadStrategy(nn.Module):
+    def __init__(self, cfg: ModelConfig, backbone_out: int):
         ...
 
-    def forward(
-        self,
-        cat_dict: dict[str, torch.Tensor],
-        cont: torch.Tensor,
-        ord_feat: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        ...
+    def forward(self, h: torch.Tensor) -> dict[str, torch.Tensor]:
         return {
             "swing_attempt": ...,  # (B,) logits
             "swing_result": ...,   # (B, num_swing_result) logits
             "bb_type": ...,        # (B, num_bb_type) logits
-            "regression": ...,     # (B, 3) 予測値
+            "regression": ...,     # (B, 3) or dict
         }
-```
 
-> 系列モデルの場合は `forward` に `**kwargs` で系列テンソルを受け取り、
-> クラス属性 `is_seq_model = True` を定義します。
-
-### 2. `__init__.py` にインポートを追加
-
-`src/models/__init__.py` 末尾のインポートブロックにモジュールを追加します。
-
-```python
-from models import atbat_dnn  # noqa: E402, F401
-from models import my_model   # noqa: E402, F401  # ← 追加
-```
-
-### 3. 設定ファイル (YAML) で指定
-
-```yaml
-model:
-  architecture: my_model
-  # その他のハイパーパラメータ
+HEAD_STRATEGY_REGISTRY["my_strategy"] = MyHeadStrategy
 ```
 
 ## 規約
 
 | 項目 | 要件 |
 |------|------|
-| コンストラクタ引数 | `(cfg: ModelConfig, num_cont: int, num_ord: int)` |
-| `forward` 引数 | `(cat_dict, cont, ord_feat)` ※系列モデルは `**kwargs` 追加 |
-| `forward` 戻り値 | `dict` with keys: `swing_attempt`, `swing_result`, `bb_type`, `regression` |
-| 登録名 | `@register_model("名前")` で一意な名前を付ける |
-| 系列モデル | クラス属性 `is_seq_model = True` を定義 |
-| 打者履歴モデル | クラス属性 `is_batter_hist_model = True` を定義 |
+| Backbone | `__init__(input_dim, hidden_dims, dropout)` / `output_dim` プロパティ / `forward(x) → Tensor` |
+| HeadStrategy | `__init__(cfg, backbone_out)` / `forward(h) → dict` |
+| SeqEncoder | `BaseSeqEncoder` 継承 / `output_dim` プロパティ / `forward(seq_pitch_type, seq_cont, seq_swing_attempt, seq_swing_result, seq_mask) → Tensor` |
+| 出力 dict keys | `swing_attempt`, `swing_result`, `bb_type`, `regression` |
