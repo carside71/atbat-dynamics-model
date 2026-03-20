@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from scipy.special import softmax
 
 
@@ -16,6 +17,21 @@ def load_predictions(pred_dir: str | Path, split: str = "test") -> tuple[dict[st
     with open(pred_dir / f"predictions_meta_{split}.json") as f:
         meta = json.load(f)
     return dict(npz), meta
+
+
+def load_metadata(metadata_dir: str | Path) -> tuple[pd.DataFrame, dict[str, str]]:
+    """メタデータディレクトリから打席メタデータと選手名辞書を読み込む.
+
+    Returns:
+        (atbat_meta_df, player_names)
+        atbat_meta_df: at_bat_id → batter/pitcher/team 情報
+        player_names: {mlbam_id_str: "Last, First"}
+    """
+    metadata_dir = Path(metadata_dir)
+    atbat_meta = pd.read_parquet(metadata_dir / "atbat_metadata.parquet")
+    with open(metadata_dir / "player_names.json", encoding="utf-8") as f:
+        player_names = json.load(f)
+    return atbat_meta, player_names
 
 
 def _decode_base_out_state(val: int) -> str:
@@ -57,6 +73,7 @@ def _build_sample_data(
     idx: int,
     preds: dict[str, np.ndarray],
     meta: dict,
+    sample_metadata: dict | None = None,
 ) -> dict:
     """1 サンプル分のデータを辞書にまとめる."""
     valid_input = _is_valid_input(preds, idx)
@@ -178,6 +195,7 @@ def _build_sample_data(
         "idx": idx,
         "valid_input": valid_input,
         "inputs": inputs,
+        "game_info": sample_metadata,
         "swing_attempt": {"prob": round(sa_prob, 4), "true": sa_true},
         "swing_result": {"probs": [round(p, 4) for p in sr_probs], "names": sr_names, "true": sr_true},
         "bb_type": {"probs": [round(p, 4) for p in bt_probs], "names": bt_names, "true": bt_true},
@@ -193,6 +211,8 @@ def select_samples(
     filter_mode: str = "all",
     sort_by: str = "index",
     seed: int = 42,
+    batter_mlbam: int | None = None,
+    atbat_meta: pd.DataFrame | None = None,
 ) -> list[int]:
     """表示するサンプルのインデックスを選択する."""
     n = len(preds["sa_prob"])
@@ -202,6 +222,13 @@ def select_samples(
     if filter_mode != "include_invalid" and "cont" in preds:
         valid_mask = ~np.all(preds["cont"] == 0.0, axis=1)
         indices = indices[valid_mask]
+
+    # 打者フィルタ（MLBAM ID 指定）
+    if batter_mlbam is not None and "meta_at_bat_id" in preds and atbat_meta is not None:
+        at_bat_ids = preds["meta_at_bat_id"]
+        batter_atbat_ids = set(atbat_meta.loc[atbat_meta["batter_mlbam"] == batter_mlbam, "at_bat_id"].values)
+        batter_mask = np.array([int(at_bat_ids[i]) in batter_atbat_ids for i in indices])
+        indices = indices[batter_mask]
 
     if filter_mode == "misclassified_sa":
         sa_pred = (preds["sa_prob"] > 0.5).astype(int)
@@ -242,14 +269,107 @@ def select_samples(
     return indices.tolist()
 
 
+def build_sample_metadata(
+    preds: dict[str, np.ndarray],
+    sample_indices: list[int],
+    atbat_meta: pd.DataFrame | None = None,
+    player_names: dict[str, str] | None = None,
+) -> dict[int, dict]:
+    """各サンプルのゲームメタデータ辞書を構築する.
+
+    Returns:
+        {sample_idx: {batter_id, batter_name, pitcher_id, pitcher_name,
+                       home_team, away_team, game_pk, game_date, at_bat_id, at_bat_number}}
+    """
+    result: dict[int, dict] = {}
+    if atbat_meta is None or "meta_at_bat_id" not in preds:
+        return result
+
+    player_names = player_names or {}
+    at_bat_ids = preds["meta_at_bat_id"]
+    game_pks = preds.get("meta_game_pk")
+    game_dates = preds.get("meta_game_date")
+
+    # at_bat_id → メタデータの高速ルックアップ
+    needed_ids = set(int(at_bat_ids[i]) for i in sample_indices)
+    sub = atbat_meta[atbat_meta["at_bat_id"].isin(needed_ids)].set_index("at_bat_id")
+
+    for idx in sample_indices:
+        ab_id = int(at_bat_ids[idx])
+        info: dict = {
+            "at_bat_id": ab_id,
+            "game_pk": int(game_pks[idx]) if game_pks is not None else None,
+            "game_date": str(game_dates[idx]) if game_dates is not None else None,
+        }
+        if ab_id in sub.index:
+            row = sub.loc[ab_id]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
+            batter_mlbam = int(row["batter_mlbam"]) if pd.notna(row.get("batter_mlbam")) else None
+            pitcher_mlbam = int(row["pitcher_mlbam"]) if pd.notna(row.get("pitcher_mlbam")) else None
+            info.update(
+                {
+                    "batter_id": batter_mlbam,
+                    "batter_name": player_names.get(str(batter_mlbam), str(batter_mlbam)) if batter_mlbam else None,
+                    "pitcher_id": pitcher_mlbam,
+                    "pitcher_name": player_names.get(str(pitcher_mlbam), str(pitcher_mlbam)) if pitcher_mlbam else None,
+                    "home_team": str(row["home_team"]) if pd.notna(row.get("home_team")) else None,
+                    "away_team": str(row["away_team"]) if pd.notna(row.get("away_team")) else None,
+                    "at_bat_number": int(row["at_bat_number"]) if pd.notna(row.get("at_bat_number")) else None,
+                }
+            )
+        result[idx] = info
+    return result
+
+
+def resolve_batter(
+    query: str,
+    atbat_meta: pd.DataFrame,
+    player_names: dict[str, str],
+) -> int | None:
+    """打者クエリ（MLBAM ID または名前の一部）を MLBAM ID に解決する."""
+    # 数値ならMLBAM IDとして扱う
+    try:
+        mlbam_id = int(query)
+        if mlbam_id in atbat_meta["batter_mlbam"].values:
+            return mlbam_id
+    except ValueError:
+        pass
+
+    # 名前で部分一致検索
+    query_lower = query.lower()
+    matches = []
+    for id_str, name in player_names.items():
+        if query_lower in name.lower():
+            mlbam_id = int(id_str)
+            if mlbam_id in atbat_meta["batter_mlbam"].values:
+                matches.append((mlbam_id, name))
+
+    if len(matches) == 1:
+        return matches[0][0]
+    elif len(matches) > 1:
+        print("  複数の打者が一致しました:")
+        for mid, mname in matches:
+            count = (atbat_meta["batter_mlbam"] == mid).sum()
+            print(f"    {mid}: {mname} ({count:,} at-bats)")
+        print("  MLBAM ID を指定して再実行してください。")
+        return None
+    return None
+
+
 def build_viewer_html(
     preds: dict[str, np.ndarray],
     meta: dict,
     sample_indices: list[int],
     template_path: str | Path,
+    atbat_meta: pd.DataFrame | None = None,
+    player_names: dict[str, str] | None = None,
 ) -> str:
     """サンプルデータを HTML テンプレートに埋め込んで完成した HTML を返す."""
-    samples = [_build_sample_data(i, preds, meta) for i in sample_indices]
+    # ゲームメタデータの構築
+    sample_meta = build_sample_metadata(preds, sample_indices, atbat_meta, player_names)
+
+    samples = [_build_sample_data(i, preds, meta, sample_metadata=sample_meta.get(i)) for i in sample_indices]
 
     template_path = Path(template_path)
     template = template_path.read_text(encoding="utf-8")

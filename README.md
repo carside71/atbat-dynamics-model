@@ -78,6 +78,7 @@ atbat-dynamics-model/
 │   ├── run_container_mac.sh     # Mac 用コンテナ起動
 │   └── run_container_wsl.sh     # WSL 用コンテナ起動
 ├── tools/
+│   ├── build_metadata.py        # ビューア用メタデータ構築（選手名・試合情報）
 │   ├── generate_viewer.py       # 予測ビューア HTML 生成 CLI
 │   ├── viewer_builder.py        # データ変換・HTML 組み立て
 │   └── viewer_template.html     # ビューア HTML テンプレート
@@ -275,25 +276,75 @@ python3 scripts/export_model_graph.py --arch atbat_dnn_mdn
 
 テスト結果をサンプル単位でインタラクティブに閲覧できる自己完結型 HTML ビューアを生成します。
 
+### 前準備: メタデータの構築
+
+ビューアで試合情報（選手名・チーム・日付など）を表示するには、事前にメタデータを構築しておく必要があります。**初回のみ実行すれば OK です**（データセットが変わらない限り再実行不要）。
+
+```bash
+python3 tools/build_metadata.py
+```
+
+処理内容:
+1. `data/` と `preprocess_01/` の Parquet を行位置ベースで結合し、打席ごとのメタデータ（打者/投手 MLBAM ID・チーム・打席番号）を抽出
+2. 元の Statcast CSV から投手名を収集
+3. MLB Stats API から打者名を一括取得
+4. `atbat_metadata.parquet` と `player_names.json` を出力
+
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| `--data-dir` | `/workspace/datasets/statcast-customized/data` | 最終 data Parquet ディレクトリ |
+| `--preprocess-dir` | `/workspace/datasets/statcast-customized-tmp/preprocess_01` | preprocess_01 Parquet ディレクトリ |
+| `--output-dir` | `/workspace/datasets/statcast-customized/metadata` | メタデータ出力先 |
+| `--raw-csv-dir` | `/workspace/datasets/statcast` | 元の Statcast CSV ディレクトリ（省略可） |
+
+生成ファイル:
+
+| ファイル | 内容 |
+|---|---|
+| `atbat_metadata.parquet` | at_bat_id → 打者/投手 MLBAM ID, game_pk, チーム, 打席番号 |
+| `player_names.json` | MLBAM ID → 選手名 (`"Last, First"` 形式) |
+
 ### 使い方
 
 ```bash
-# 1. テスト実行時に予測データを保存
+# 1. メタデータ構築（初回のみ）
+python3 tools/build_metadata.py
+
+# 2. テスト実行時に予測データを保存
 python3 src/test.py --config configs/seq_resdnn_batter_hist.yaml --save-predictions
 
-# 2. ビューア HTML を生成
+# 3. ビューア HTML を生成
 python3 tools/generate_viewer.py \
   --pred-dir outputs/.../test/2026-03-20-120000 \
   --max-samples 3000
 
-# 3. ブラウザで開く
+# 4. ブラウザで開く
 # 生成された viewer.html をブラウザで開くだけで動作（外部依存なし）
 ```
+
+#### 特定の打者だけのビューアを生成
+
+`--batter` オプションで打者を指定すると、その打者の全データだけを含むビューアが生成されます。
+
+```bash
+# MLBAM ID で指定
+python3 tools/generate_viewer.py \
+  --pred-dir outputs/.../test/2026-03-20-120000 \
+  --batter 660271
+
+# 名前の一部で指定（部分一致検索）
+python3 tools/generate_viewer.py \
+  --pred-dir outputs/.../test/2026-03-20-120000 \
+  --batter Ohtani
+```
+
+`--batter` 指定時は自動的に `filter=all`（全サンプル）、`max-samples=100000`（実質無制限）に調整されます。
 
 ### ビューア画面
 
 1枚の "カード" に1サンプル（1投球）の全情報がまとまっています:
 
+- **試合情報**: 打者名・投手名（MLBAM ID 付き）、対戦チーム、日付、Game ID、打席番号（メタデータ構築済みの場合）
 - **入力情報**: 球種・投手投げ手・打席・カウント・走者/アウト状況・球速・回転数など
 - **ストライクゾーン**: SVG で投球コースを描画（ゾーン内/外で色分け）
 - **Swing Attempt**: 予測確率バー + GT との正誤
@@ -318,10 +369,12 @@ python3 tools/generate_viewer.py \
 | `--pred-dir` | （必須） | `predictions_*.npz` と `predictions_meta_*.json` があるディレクトリ |
 | `--split` | `test` | 評価スプリット（`test` / `val`） |
 | `--max-samples` | `2000` | HTML に含める最大サンプル数 |
-| `--filter` | `all` | サンプル選択フィルタ（`all` / `misclassified_sa` / `misclassified_sr` / `misclassified_bt` / `random`） |
+| `--filter` | `random` | サンプル選択フィルタ（`all` / `misclassified_sa` / `misclassified_sr` / `misclassified_bt` / `random` / `include_invalid`） |
 | `--sort` | `index` | ソート基準（`index` / `sa_error` / `reg_error`） |
 | `--output` | `pred-dir/viewer.html` | 出力 HTML ファイルパス |
 | `--seed` | `42` | `random` フィルタ時のシード |
+| `--metadata-dir` | `/workspace/datasets/statcast-customized/metadata` | メタデータディレクトリ（試合情報・選手名表示用） |
+| `--batter` | — | 特定の打者のみ表示（MLBAM ID または名前の一部） |
 
 ### データサイズの目安
 

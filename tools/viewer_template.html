@@ -256,6 +256,31 @@ kbd {
   background: rgba(255,255,255,0.05);
   border-radius: 4px;
 }
+/* Game info section */
+.game-info {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 24px;
+  font-size: 13px;
+}
+.game-info-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.game-info-item .label {
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 60px;
+}
+.game-info-item .value {
+  font-weight: 500;
+}
+.game-info-item .id {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-left: 4px;
+}
 </style>
 </head>
 <body>
@@ -373,6 +398,36 @@ function render() {
   document.getElementById("nextBtn").disabled = currentPos >= filteredIndices.length - 1;
 
   let html = "";
+
+  // === Game Info Section ===
+  if (s.game_info) {
+    const g = s.game_info;
+    html += '<div class="card-section">';
+    html += '<div class="section-title">試合情報</div>';
+    html += '<div class="game-info">';
+    if (g.batter_name) {
+      html += `<div class="game-info-item"><span class="label">打者:</span><span class="value">${g.batter_name}<span class="id">#${g.batter_id}</span></span></div>`;
+    }
+    if (g.pitcher_name) {
+      html += `<div class="game-info-item"><span class="label">投手:</span><span class="value">${g.pitcher_name}<span class="id">#${g.pitcher_id}</span></span></div>`;
+    }
+    if (g.home_team && g.away_team) {
+      html += `<div class="game-info-item"><span class="label">チーム:</span><span class="value">${g.away_team} @ ${g.home_team}</span></div>`;
+    }
+    if (g.game_date) {
+      html += `<div class="game-info-item"><span class="label">日付:</span><span class="value">${g.game_date}</span></div>`;
+    }
+    if (g.game_pk) {
+      html += `<div class="game-info-item"><span class="label">Game ID:</span><span class="value">${g.game_pk}</span></div>`;
+    }
+    if (g.at_bat_number) {
+      html += `<div class="game-info-item"><span class="label">打席 #:</span><span class="value">${g.at_bat_number}</span></div>`;
+    }
+    if (g.at_bat_id !== undefined) {
+      html += `<div class="game-info-item"><span class="label">AB ID:</span><span class="value">${g.at_bat_id}</span></div>`;
+    }
+    html += '</div></div>';
+  }
 
   // === Input Section ===
   html += '<div class="card-section">';

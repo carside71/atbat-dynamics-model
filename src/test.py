@@ -345,6 +345,24 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     del all_df
     print(f"  Samples: {len(test_df):,}")
 
+    # メタデータ列を保存用に抽出（Dataset 構築前に取得）
+    sample_meta_arrays = {}
+    if args.save_predictions:
+        sample_meta_arrays["meta_at_bat_id"] = (
+            test_df["at_bat_id"].to_numpy(dtype=np.int64)
+            if "at_bat_id" in test_df.columns
+            else np.full(len(test_df), -1, dtype=np.int64)
+        )
+        sample_meta_arrays["meta_game_pk"] = (
+            test_df["game_pk"].to_numpy(dtype=np.int64)
+            if "game_pk" in test_df.columns
+            else np.full(len(test_df), -1, dtype=np.int64)
+        )
+        if "game_date" in test_df.columns:
+            sample_meta_arrays["meta_game_date"] = np.array([str(d) for d in test_df["game_date"]], dtype="U10")
+        else:
+            sample_meta_arrays["meta_game_date"] = np.full(len(test_df), "", dtype="U10")
+
     if use_seq:
         test_ds = StatcastSequenceDataset(test_df, data_cfg, max_seq_len, norm_stats, reg_norm_stats)
     else:
@@ -390,6 +408,9 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
 
     # === 予測値・入力特徴量を NPZ で保存 ===
     if args.save_predictions:
+        # サンプルメタデータを予測結果に追加
+        preds.update(sample_meta_arrays)
+
         npz_path = test_output_dir / f"predictions_{args.split}.npz"
         np.savez_compressed(npz_path, **preds)
         print(f"Predictions saved to {npz_path}")
