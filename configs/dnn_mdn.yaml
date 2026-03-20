@@ -45,11 +45,13 @@ data:
     - hit_distance_sc
 
 model:
-  architecture: atbat_dnn_mdn
-  mdn_num_components: 5
+  backbone_type: dnn
   backbone_hidden: [512, 256, 128]
   head_hidden: [64]
+  head_activation: relu
   dropout: 0.2
+  regression_head_type: mdn
+  mdn_num_components: 5
 
 train:
   batch_size: 4096

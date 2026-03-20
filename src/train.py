@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, ModelConfig, TrainConfig, load_config
 from datasets import (
+    StatcastBatterHistDataset,
     StatcastDataset,
     StatcastSequenceDataset,
     compute_normalization_stats,
@@ -38,22 +39,36 @@ def _build_class_weights(stats: dict[str, pd.DataFrame], key: str, device: torch
 
 
 def _model_forward(
-    model: nn.Module, batch: dict[str, torch.Tensor], data_cfg: DataConfig, use_seq: bool
+    model: nn.Module,
+    batch: dict[str, torch.Tensor],
+    data_cfg: DataConfig,
+    use_seq: bool,
+    use_batter_hist: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """モデルの forward を呼び出す（シーケンス対応）."""
+    """モデルの forward を呼び出す（シーケンス・打者履歴対応）."""
     cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
+    kwargs = {}
     if use_seq:
-        return model(
-            cat_dict,
-            batch["cont"],
-            batch["ord"],
+        kwargs.update(
             seq_pitch_type=batch["seq_pitch_type"],
             seq_cont=batch["seq_cont"],
             seq_swing_attempt=batch["seq_swing_attempt"],
             seq_swing_result=batch["seq_swing_result"],
             seq_mask=batch["seq_mask"],
         )
-    return model(cat_dict, batch["cont"], batch["ord"])
+    if use_batter_hist:
+        kwargs.update(
+            hist_pitch_type=batch["hist_pitch_type"],
+            hist_cont=batch["hist_cont"],
+            hist_swing_attempt=batch["hist_swing_attempt"],
+            hist_swing_result=batch["hist_swing_result"],
+            hist_bb_type=batch["hist_bb_type"],
+            hist_launch_speed=batch["hist_launch_speed"],
+            hist_launch_angle=batch["hist_launch_angle"],
+            hist_pitch_mask=batch["hist_pitch_mask"],
+            hist_atbat_mask=batch["hist_atbat_mask"],
+        )
+    return model(cat_dict, batch["cont"], batch["ord"], **kwargs)
 
 
 def _build_loss_functions(
@@ -83,6 +98,7 @@ def evaluate(
     loss_fn_sr: nn.Module | None = None,
     loss_fn_bt: nn.Module | None = None,
     use_seq: bool = False,
+    use_batter_hist: bool = False,
 ) -> dict[str, float]:
     """検証データで評価を行い、損失とメトリクスを返す."""
     model.eval()
@@ -95,8 +111,8 @@ def evaluate(
     bt_correct, bt_total = 0, 0
 
     for batch in loader:
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        outputs = _model_forward(model, batch, data_cfg, use_seq)
+        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+        outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
         _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
         for k, v in losses.items():
@@ -173,13 +189,22 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     val_ids = load_split_at_bat_ids(data_cfg.split_dir, "val")
 
     use_seq = model_cfg.max_seq_len > 0
+    use_batter_hist = model_cfg.batter_hist_max_atbats > 0
+    need_at_bat_id = use_seq or use_batter_hist
+    # # game_pk, batter は batter_hist Dataset で必要
+    # extra_cols_to_keep = ["game_pk"] if use_batter_hist else []
 
-    if use_seq:
+    if need_at_bat_id:
         train_df = all_df[all_df["at_bat_id"].isin(train_ids)].reset_index(drop=True)
         val_df = all_df[all_df["at_bat_id"].isin(val_ids)].reset_index(drop=True)
     else:
-        train_df = all_df[all_df["at_bat_id"].isin(train_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
-        val_df = all_df[all_df["at_bat_id"].isin(val_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
+        drop_cols = ["at_bat_id"] + [c for c in ["game_pk", "game_date"] if c in all_df.columns]
+        train_df = (
+            all_df[all_df["at_bat_id"].isin(train_ids)].drop(columns=drop_cols, errors="ignore").reset_index(drop=True)
+        )
+        val_df = (
+            all_df[all_df["at_bat_id"].isin(val_ids)].drop(columns=drop_cols, errors="ignore").reset_index(drop=True)
+        )
     del all_df
     print(f"  Train samples: {len(train_df):,}")
     print(f"  Val samples: {len(val_df):,}")
@@ -196,7 +221,26 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
     # === Dataset & DataLoader ===
     print("Building datasets...")
-    if use_seq:
+    if use_batter_hist:
+        train_ds = StatcastBatterHistDataset(
+            train_df,
+            data_cfg,
+            model_cfg.max_seq_len,
+            model_cfg.batter_hist_max_atbats,
+            model_cfg.batter_hist_max_pitches,
+            norm_stats,
+            reg_norm_stats,
+        )
+        val_ds = StatcastBatterHistDataset(
+            val_df,
+            data_cfg,
+            model_cfg.max_seq_len,
+            model_cfg.batter_hist_max_atbats,
+            model_cfg.batter_hist_max_pitches,
+            norm_stats,
+            reg_norm_stats,
+        )
+    elif use_seq:
         train_ds = StatcastSequenceDataset(train_df, data_cfg, model_cfg.max_seq_len, norm_stats, reg_norm_stats)
         val_ds = StatcastSequenceDataset(val_df, data_cfg, model_cfg.max_seq_len, norm_stats, reg_norm_stats)
     else:
@@ -204,6 +248,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         val_ds = StatcastDataset(val_df, data_cfg, norm_stats, reg_norm_stats)
     del train_df, val_df  # メモリ解放
 
+    use_persistent = train_cfg.num_workers > 0
     train_loader = DataLoader(
         train_ds,
         batch_size=train_cfg.batch_size,
@@ -211,6 +256,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         num_workers=train_cfg.num_workers,
         pin_memory=True,
         drop_last=True,
+        persistent_workers=use_persistent,
     )
     val_loader = DataLoader(
         val_ds,
@@ -218,6 +264,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         shuffle=False,
         num_workers=train_cfg.num_workers,
         pin_memory=True,
+        persistent_workers=use_persistent,
     )
 
     # === モデル構築 ===
@@ -258,10 +305,10 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{train_cfg.num_epochs}")
         for batch in pbar:
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
             optimizer.zero_grad()
-            outputs = _model_forward(model, batch, data_cfg, use_seq)
+            outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
             loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -284,7 +331,9 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         avg_train = {k: v / max(n_batches, 1) for k, v in epoch_losses.items()}
 
         # 検証
-        val_metrics = evaluate(model, val_loader, train_cfg, data_cfg, device, loss_fn_sr, loss_fn_bt, use_seq)
+        val_metrics = evaluate(
+            model, val_loader, train_cfg, data_cfg, device, loss_fn_sr, loss_fn_bt, use_seq, use_batter_hist
+        )
 
         record = {"epoch": epoch, "lr": scheduler.get_last_lr()[0]}
         record.update({f"train_{k}": v for k, v in avg_train.items()})

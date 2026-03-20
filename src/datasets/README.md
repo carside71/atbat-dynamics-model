@@ -10,15 +10,16 @@
 |---|---|
 | `data/` | 年月別の Parquet ファイル（例: `statcast_2024_04.parquet`） |
 | `stats/` | カテゴリカル特徴量のラベル対応テーブル（CSV） |
-| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV） |
+| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV）※時系列分割 |
+| `batter_history/` | 打者履歴ルックアップテーブル（Parquet） |
 
-データ分割は `split/` ディレクトリの `at_bat_id` により行われます。各 Parquet ファイルに含まれる `at_bat_id` カラムと以下の CSV ファイルを照合して分割します。
+データ分割は **時系列分割**（`game_date` ベース）で行われます。ダブルヘッダーを正しく区別するため `game_pk`（試合ごとに一意な ID）を使用します。分割基準日:
 
-| ファイル | 用途 |
+| 分割 | 期間 |
 |---|---|
-| `split/train_at_bat_ids.csv` | 学習データ |
-| `split/valid_at_bat_ids.csv` | 検証データ |
-| `split/test_at_bat_ids.csv` | テストデータ |
+| Train | 〜 2024-06-30 |
+| Valid | 2024-07-01 〜 2024-10-30 |
+| Test | 2025-03-15 〜 |
 
 ---
 
@@ -81,6 +82,7 @@ $$
 | `loaders.py` | データ読み込み・統計ユーティリティ関数 |
 | `statcast.py` | `StatcastDataset`（単一投球データセット） |
 | `statcast_sequence.py` | `StatcastSequenceDataset`（系列対応データセット） |
+| `statcast_batter_hist.py` | `StatcastBatterHistDataset`（打者履歴対応データセット） |
 
 ---
 
@@ -182,4 +184,66 @@ from datasets import StatcastSequenceDataset
 
 # at_bat_id 列を保持したままの DataFrame を渡す
 ds = StatcastSequenceDataset(df, data_cfg, max_seq_len=10, norm_stats=norm_stats)
+```
+
+---
+
+## StatcastBatterHistDataset
+
+**打者の過去打席履歴（生投球データ）を提供する**データセット。
+`StatcastSequenceDataset` の全機能に加え、当該試合以前の過去 N 打席分の Statcast 生データを返す。
+
+### 仕組み
+
+```
+打者 A の試合履歴 (game_pk 順)
+────────────────────────────────
+  game_pk=100 (4 打席) → at_bat_id: [a1, a2, a3, a4]
+  game_pk=200 (3 打席) → at_bat_id: [a5, a6, a7]
+  game_pk=300 (5 打席) → 現在の試合
+
+現在の試合の打席では、過去 N=50 打席（a1〜a7 + それ以前）の
+投球データを参照可能。ダブルヘッダーも game_pk で区別。
+```
+
+### データソース
+
+`batter_history/` ディレクトリの以下のファイルを使用（`scripts/add_game_info_and_rebuild.py` で生成）:
+
+| ファイル | 内容 |
+|---|---|
+| `batter_game_history.parquet` | (batter, game_pk) → 過去 N 打席の at_bat_id リスト |
+| `atbat_row_indices.parquet` | at_bat_id → 元データの行インデックス |
+
+### 追加の出力フィールド
+
+`StatcastSequenceDataset` の出力に加えて、以下の打者履歴フィールドを返す:
+
+| フィールド | 形状 | 説明 |
+|---|---|---|
+| `hist_pitch_type` | `(N, P)` | 過去打席の投球球種 |
+| `hist_cont` | `(N, P, 15)` | 過去打席の投球連続値特徴量（正規化済み） |
+| `hist_swing_attempt` | `(N, P)` | 過去打席のスイング有無 |
+| `hist_swing_result` | `(N,)` | 打席最終球のスイング結果 |
+| `hist_bb_type` | `(N,)` | 打球種別（ground_ball 等） |
+| `hist_launch_speed` | `(N,)` | 打球速度（正規化済み） |
+| `hist_launch_angle` | `(N,)` | 打球角度（正規化済み） |
+| `hist_pitch_mask` | `(N, P)` | 投球レベルの有効マスク |
+| `hist_atbat_mask` | `(N,)` | 打席レベルの有効マスク |
+
+> **N** = `batter_hist_max_atbats`（デフォルト 50）、**P** = `batter_hist_max_pitches`（デフォルト 10）
+
+> **注意**: 時系列分割が必須です。ランダム分割では将来のデータが履歴に混入するリークが発生します。
+
+### 使い方
+
+```python
+from datasets import StatcastBatterHistDataset
+
+ds = StatcastBatterHistDataset(
+    df, data_cfg, max_seq_len=10, norm_stats=norm_stats,
+    batter_history_dir="/path/to/batter_history",
+    batter_hist_max_atbats=50,
+    batter_hist_max_pitches=10,
+)
 ```

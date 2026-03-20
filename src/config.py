@@ -53,6 +53,9 @@ class DataConfig:
         ]
     )
 
+    # 打者履歴
+    batter_history_dir: Path = Path("/workspace/datasets/statcast-customized/batter_history")
+
     # ターゲット
     target_cls_swing_attempt: str = "swing_attempt"
     target_cls_swing_result: str = "swing_result"
@@ -68,34 +71,40 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    # モデルアーキテクチャ名（モデルレジストリのキー）
-    architecture: str = "atbat_dnn"
-
-    # カテゴリカル特徴量の埋め込み次元（num_classes → embed_dim のマッピング）
-    # 実行時に stats ファイルから自動設定される
+    # カテゴリカル特徴量の埋め込み次元（実行時に stats から自動設定）
     embedding_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
 
-    # ネットワーク構造
+    # Backbone
+    backbone_type: str = "resdnn"  # "dnn" | "resdnn"
     backbone_hidden: list[int] = field(default_factory=lambda: [512, 256, 128])
-    head_hidden: list[int] = field(default_factory=lambda: [64])
     dropout: float = 0.2
 
-    # 出力クラス数
+    # Head Strategy
+    head_strategy: str = "independent"  # "independent" | "cascade"
+    head_hidden: list[int] = field(default_factory=lambda: [64])
+    head_activation: str = "gelu"  # "relu" | "gelu"
+    detach_cascade: bool = True  # cascade 時のみ有効
+
+    # Regression Head
+    regression_head_type: str = "mlp"  # "mlp" | "mdn"
+    mdn_num_components: int = 5  # mdn 時のみ有効
+
+    # 出力クラス数（実行時に自動設定）
     num_swing_result: int = 3
     num_bb_type: int = 4
 
-    # MDN パラメータ（atbat_dnn_mdn 等で使用）
-    mdn_num_components: int = 5
-
-    # カスケードヘッド設定（atbat_resdnn_cascade 等で使用）
-    detach_cascade: bool = True  # True: 下流勾配を上流に逆流させない
-
-    # シーケンス設定（atbat_seq_resdnn 等で使用）
-    max_seq_len: int = 0  # 0: 系列なし, >0: 過去投球系列を使用
+    # シーケンスエンコーダ（0 で無効）
+    max_seq_len: int = 0
     seq_encoder_type: str = "gru"  # "gru" | "transformer"
     seq_hidden_dim: int = 64
     seq_num_layers: int = 1
     seq_bidirectional: bool = False
+
+    # 打者履歴エンコーダ（0 で無効）
+    batter_hist_max_atbats: int = 0
+    batter_hist_max_pitches: int = 10
+    batter_hist_hidden_dim: int = 64
+    batter_hist_num_layers: int = 1
 
 
 @dataclass
