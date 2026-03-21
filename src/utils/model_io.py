@@ -42,6 +42,7 @@ def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> nn
 def save_model_config(model_cfg: ModelConfig, data_cfg: DataConfig, output_dir: Path) -> None:
     """モデル設定を model_config.json に保存する."""
     model_info = {
+        "model_scope": model_cfg.model_scope,
         "backbone_type": model_cfg.backbone_type,
         "embedding_dims": model_cfg.embedding_dims,
         "backbone_hidden": model_cfg.backbone_hidden,
@@ -81,6 +82,7 @@ def load_trained_model(
         saved = json.load(f)
 
     model_cfg = ModelConfig(
+        model_scope=saved.get("model_scope", "all"),
         backbone_type=saved.get("backbone_type", "resdnn"),
         embedding_dims={k: tuple(v) for k, v in saved["embedding_dims"].items()},
         backbone_hidden=saved["backbone_hidden"],

@@ -16,7 +16,7 @@ from tqdm import tqdm
 # src ディレクトリを起点にインポート
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import DataConfig, ModelConfig, TrainConfig, load_config
+from config import DataConfig, ModelConfig, TrainConfig, load_config, validate_model_scope
 from datasets import (
     StatcastBatterHistDataset,
     StatcastDataset,
@@ -90,6 +90,18 @@ def _build_loss_functions(
     return loss_fn_sr, loss_fn_bt
 
 
+def _format_loss_parts(metrics: dict[str, float], scope: str) -> str:
+    """スコープに応じた損失文字列を構築する."""
+    parts = []
+    if scope in ("all", "swing_attempt"):
+        parts.append(f"SA={metrics.get('swing_attempt', 0.0):.4f}")
+    if scope in ("all", "outcome"):
+        parts.append(f"SR={metrics.get('swing_result', 0.0):.4f}")
+        parts.append(f"BT={metrics.get('bb_type', 0.0):.4f}")
+        parts.append(f"Reg={metrics.get('regression', 0.0):.4f}")
+    return " ".join(parts)
+
+
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
@@ -97,6 +109,7 @@ def evaluate(
     train_cfg: TrainConfig,
     data_cfg: DataConfig,
     device: torch.device,
+    model_scope: str = "all",
     loss_fn_sr: nn.Module | None = None,
     loss_fn_bt: nn.Module | None = None,
     use_seq: bool = False,
@@ -122,28 +135,33 @@ def evaluate(
         n_batches += 1
 
         # swing_attempt accuracy
-        pred_sa = (outputs["swing_attempt"].sigmoid() > 0.5).float()
-        sa_correct += (pred_sa == batch["swing_attempt"]).sum().item()
-        sa_total += len(pred_sa)
+        if "swing_attempt" in outputs:
+            pred_sa = (outputs["swing_attempt"].sigmoid() > 0.5).float()
+            sa_correct += (pred_sa == batch["swing_attempt"]).sum().item()
+            sa_total += len(pred_sa)
 
         # swing_result accuracy
-        sr_mask = batch["swing_result"] >= 0
-        if sr_mask.any():
-            pred_sr = outputs["swing_result"][sr_mask].argmax(dim=-1)
-            sr_correct += (pred_sr == batch["swing_result"][sr_mask]).sum().item()
-            sr_total += sr_mask.sum().item()
+        if "swing_result" in outputs:
+            sr_mask = batch["swing_result"] >= 0
+            if sr_mask.any():
+                pred_sr = outputs["swing_result"][sr_mask].argmax(dim=-1)
+                sr_correct += (pred_sr == batch["swing_result"][sr_mask]).sum().item()
+                sr_total += sr_mask.sum().item()
 
         # bb_type accuracy
-        bt_mask = batch["bb_type"] >= 0
-        if bt_mask.any():
-            pred_bt = outputs["bb_type"][bt_mask].argmax(dim=-1)
-            bt_correct += (pred_bt == batch["bb_type"][bt_mask]).sum().item()
-            bt_total += bt_mask.sum().item()
+        if "bb_type" in outputs:
+            bt_mask = batch["bb_type"] >= 0
+            if bt_mask.any():
+                pred_bt = outputs["bb_type"][bt_mask].argmax(dim=-1)
+                bt_correct += (pred_bt == batch["bb_type"][bt_mask]).sum().item()
+                bt_total += bt_mask.sum().item()
 
     avg_losses = {k: v / max(n_batches, 1) for k, v in total_losses.items()}
-    avg_losses["acc_swing_attempt"] = sa_correct / max(sa_total, 1)
-    avg_losses["acc_swing_result"] = sr_correct / max(sr_total, 1)
-    avg_losses["acc_bb_type"] = bt_correct / max(bt_total, 1)
+    if model_scope in ("all", "swing_attempt"):
+        avg_losses["acc_swing_attempt"] = sa_correct / max(sa_total, 1)
+    if model_scope in ("all", "outcome"):
+        avg_losses["acc_swing_result"] = sr_correct / max(sr_total, 1)
+        avg_losses["acc_bb_type"] = bt_correct / max(bt_total, 1)
 
     return avg_losses
 
@@ -172,8 +190,12 @@ def main():
 
 
 def _train(data_cfg, model_cfg, train_cfg, output_dir):
+    validate_model_scope(model_cfg.model_scope)
+    model_scope = model_cfg.model_scope
+
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
+    print(f"Model scope: {model_scope}")
 
     torch.manual_seed(train_cfg.seed)
     np.random.seed(train_cfg.seed)
@@ -210,6 +232,14 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     del all_df
     print(f"  Train samples: {len(train_df):,}")
     print(f"  Val samples: {len(val_df):,}")
+
+    # === outcome スコープ: swing_attempt=1 のサンプルのみに絞り込み ===
+    if model_scope == "outcome":
+        train_df = train_df[train_df["swing_attempt"] == 1].reset_index(drop=True)
+        val_df = val_df[val_df["swing_attempt"] == 1].reset_index(drop=True)
+        print(f"  Filtered to swing_attempt=1:")
+        print(f"    Train samples: {len(train_df):,}")
+        print(f"    Val samples: {len(val_df):,}")
 
     # === 正規化パラメータを訓練データから計算 ===
     print("Computing normalization stats...")
@@ -321,13 +351,14 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
                 epoch_losses[k] = epoch_losses.get(k, 0.0) + v
             n_batches += 1
 
-            pbar.set_postfix(
-                total=f"{losses['total']:.4f}",
-                SA=f"{losses['swing_attempt']:.4f}",
-                SR=f"{losses['swing_result']:.4f}",
-                BT=f"{losses['bb_type']:.4f}",
-                Reg=f"{losses['regression']:.4f}",
-            )
+            postfix = {"total": f"{losses['total']:.4f}"}
+            if model_scope in ("all", "swing_attempt"):
+                postfix["SA"] = f"{losses.get('swing_attempt', 0.0):.4f}"
+            if model_scope in ("all", "outcome"):
+                postfix["SR"] = f"{losses.get('swing_result', 0.0):.4f}"
+                postfix["BT"] = f"{losses.get('bb_type', 0.0):.4f}"
+                postfix["Reg"] = f"{losses.get('regression', 0.0):.4f}"
+            pbar.set_postfix(postfix)
 
         scheduler.step()
 
@@ -335,7 +366,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
         # 検証
         val_metrics = evaluate(
-            model, val_loader, train_cfg, data_cfg, device, loss_fn_sr, loss_fn_bt, use_seq, use_batter_hist
+            model, val_loader, train_cfg, data_cfg, device, model_scope, loss_fn_sr, loss_fn_bt, use_seq, use_batter_hist
         )
 
         record = {"epoch": epoch, "lr": scheduler.get_last_lr()[0]}
@@ -343,17 +374,23 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         record.update({f"val_{k}": v for k, v in val_metrics.items()})
         history.append(record)
 
+        train_loss_str = _format_loss_parts(avg_train, model_scope)
+        val_loss_str = _format_loss_parts(val_metrics, model_scope)
+
+        acc_parts = []
+        if "acc_swing_attempt" in val_metrics:
+            acc_parts.append(f"Val SA Acc: {val_metrics['acc_swing_attempt']:.4f}")
+        if "acc_swing_result" in val_metrics:
+            acc_parts.append(f"Val SR Acc: {val_metrics['acc_swing_result']:.4f}")
+        if "acc_bb_type" in val_metrics:
+            acc_parts.append(f"Val BT Acc: {val_metrics['acc_bb_type']:.4f}")
+        acc_str = " | ".join(acc_parts)
+
         print(
             f"Epoch {epoch:3d} | "
-            f"Train Loss: {avg_train['total']:.4f} "
-            f"(SA={avg_train['swing_attempt']:.4f} SR={avg_train['swing_result']:.4f} "
-            f"BT={avg_train['bb_type']:.4f} Reg={avg_train['regression']:.4f}) | "
-            f"Val Loss: {val_metrics['total']:.4f} "
-            f"(SA={val_metrics['swing_attempt']:.4f} SR={val_metrics['swing_result']:.4f} "
-            f"BT={val_metrics['bb_type']:.4f} Reg={val_metrics['regression']:.4f}) | "
-            f"Val SA Acc: {val_metrics['acc_swing_attempt']:.4f} | "
-            f"Val SR Acc: {val_metrics['acc_swing_result']:.4f} | "
-            f"Val BT Acc: {val_metrics['acc_bb_type']:.4f}"
+            f"Train Loss: {avg_train['total']:.4f} ({train_loss_str}) | "
+            f"Val Loss: {val_metrics['total']:.4f} ({val_loss_str})"
+            + (f" | {acc_str}" if acc_str else "")
         )
 
         # ベストモデル保存

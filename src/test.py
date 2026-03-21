@@ -97,27 +97,31 @@ def collect_predictions(
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
-        all_sa_prob.append(outputs["swing_attempt"].sigmoid().cpu().numpy())
-        all_sa_true.append(batch["swing_attempt"].cpu().numpy())
+        if "swing_attempt" in outputs:
+            all_sa_prob.append(outputs["swing_attempt"].sigmoid().cpu().numpy())
+            all_sa_true.append(batch["swing_attempt"].cpu().numpy())
 
-        all_sr_logits.append(outputs["swing_result"].cpu().numpy())
-        all_sr_true.append(batch["swing_result"].cpu().numpy())
+        if "swing_result" in outputs:
+            all_sr_logits.append(outputs["swing_result"].cpu().numpy())
+            all_sr_true.append(batch["swing_result"].cpu().numpy())
 
-        all_bt_logits.append(outputs["bb_type"].cpu().numpy())
-        all_bt_true.append(batch["bb_type"].cpu().numpy())
+        if "bb_type" in outputs:
+            all_bt_logits.append(outputs["bb_type"].cpu().numpy())
+            all_bt_true.append(batch["bb_type"].cpu().numpy())
 
-        reg_out = outputs["regression"]
-        if isinstance(reg_out, dict):
-            # MDN: 混合係数で重み付けした期待値を点推定とする
-            pi = reg_out["pi"]  # (B, K)
-            mu = reg_out["mu"]  # (B, K, D)
-            # E[y] = sum_k pi_k * mu_k
-            reg_pred = (pi.unsqueeze(-1) * mu).sum(dim=1)  # (B, D)
-            all_reg_pred.append(reg_pred.cpu().numpy())
-        else:
-            all_reg_pred.append(reg_out.cpu().numpy())
-        all_reg_true.append(batch["reg_targets"].cpu().numpy())
-        all_reg_mask.append(batch["reg_mask"].cpu().numpy())
+        if "regression" in outputs:
+            reg_out = outputs["regression"]
+            if isinstance(reg_out, dict):
+                # MDN: 混合係数で重み付けした期待値を点推定とする
+                pi = reg_out["pi"]  # (B, K)
+                mu = reg_out["mu"]  # (B, K, D)
+                # E[y] = sum_k pi_k * mu_k
+                reg_pred = (pi.unsqueeze(-1) * mu).sum(dim=1)  # (B, D)
+                all_reg_pred.append(reg_pred.cpu().numpy())
+            else:
+                all_reg_pred.append(reg_out.cpu().numpy())
+            all_reg_true.append(batch["reg_targets"].cpu().numpy())
+            all_reg_mask.append(batch["reg_mask"].cpu().numpy())
 
         if save_inputs:
             for col in data_cfg.categorical_features:
@@ -125,17 +129,24 @@ def collect_predictions(
             all_cont.append(batch["cont"].cpu().numpy())
             all_ord.append(batch["ord"].cpu().numpy())
 
-    result = {
-        "sa_prob": np.concatenate(all_sa_prob),
-        "sa_true": np.concatenate(all_sa_true),
-        "sr_logits": np.concatenate(all_sr_logits),
-        "sr_true": np.concatenate(all_sr_true),
-        "bt_logits": np.concatenate(all_bt_logits),
-        "bt_true": np.concatenate(all_bt_true),
-        "reg_pred": np.concatenate(all_reg_pred),
-        "reg_true": np.concatenate(all_reg_true),
-        "reg_mask": np.concatenate(all_reg_mask),
-    }
+    result = {}
+
+    if all_sa_prob:
+        result["sa_prob"] = np.concatenate(all_sa_prob)
+        result["sa_true"] = np.concatenate(all_sa_true)
+
+    if all_sr_logits:
+        result["sr_logits"] = np.concatenate(all_sr_logits)
+        result["sr_true"] = np.concatenate(all_sr_true)
+
+    if all_bt_logits:
+        result["bt_logits"] = np.concatenate(all_bt_logits)
+        result["bt_true"] = np.concatenate(all_bt_true)
+
+    if all_reg_pred:
+        result["reg_pred"] = np.concatenate(all_reg_pred)
+        result["reg_true"] = np.concatenate(all_reg_true)
+        result["reg_mask"] = np.concatenate(all_reg_mask)
 
     if save_inputs:
         for col in data_cfg.categorical_features:
@@ -240,58 +251,62 @@ def print_results(results: dict) -> None:
     print("=" * 70)
 
     # swing_attempt
-    sa = results["swing_attempt"]
-    print("\n--- swing_attempt (binary) ---")
-    print(f"  Accuracy : {sa['accuracy']:.4f}")
-    print(f"  F1       : {sa['f1']:.4f}")
-    print(f"  ROC AUC  : {sa['roc_auc']:.4f}")
-    cm = np.array(sa["confusion_matrix"])
-    print("  Confusion Matrix:")
-    print(f"    {'':>12s} pred_no  pred_yes")
-    print(f"    {'true_no':>12s} {cm[0, 0]:>7d}  {cm[0, 1]:>8d}")
-    print(f"    {'true_yes':>12s} {cm[1, 0]:>7d}  {cm[1, 1]:>8d}")
+    if "swing_attempt" in results:
+        sa = results["swing_attempt"]
+        print("\n--- swing_attempt (binary) ---")
+        print(f"  Accuracy : {sa['accuracy']:.4f}")
+        print(f"  F1       : {sa['f1']:.4f}")
+        print(f"  ROC AUC  : {sa['roc_auc']:.4f}")
+        cm = np.array(sa["confusion_matrix"])
+        print("  Confusion Matrix:")
+        print(f"    {'':>12s} pred_no  pred_yes")
+        print(f"    {'true_no':>12s} {cm[0, 0]:>7d}  {cm[0, 1]:>8d}")
+        print(f"    {'true_yes':>12s} {cm[1, 0]:>7d}  {cm[1, 1]:>8d}")
 
     # swing_result
-    sr = results["swing_result"]
-    print(f"\n--- swing_result (multi-class, n={sr['n_samples']:,}) ---")
-    if sr["n_samples"] > 0:
-        print(f"  Accuracy   : {sr['accuracy']:.4f}")
-        print(f"  F1 (macro) : {sr['f1_macro']:.4f}")
-        print(f"  F1 (weighted): {sr['f1_weighted']:.4f}")
-        report = sr["classification_report"]
-        print("  Per-class F1:")
-        for k, v in report.items():
-            if isinstance(v, dict) and "f1-score" in v:
-                print(
-                    f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
-                )
+    if "swing_result" in results:
+        sr = results["swing_result"]
+        print(f"\n--- swing_result (multi-class, n={sr['n_samples']:,}) ---")
+        if sr["n_samples"] > 0:
+            print(f"  Accuracy   : {sr['accuracy']:.4f}")
+            print(f"  F1 (macro) : {sr['f1_macro']:.4f}")
+            print(f"  F1 (weighted): {sr['f1_weighted']:.4f}")
+            report = sr["classification_report"]
+            print("  Per-class F1:")
+            for k, v in report.items():
+                if isinstance(v, dict) and "f1-score" in v:
+                    print(
+                        f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
+                    )
 
     # bb_type
-    bt = results["bb_type"]
-    print(f"\n--- bb_type (multi-class, n={bt['n_samples']:,}) ---")
-    if bt["n_samples"] > 0:
-        print(f"  Accuracy   : {bt['accuracy']:.4f}")
-        print(f"  F1 (macro) : {bt['f1_macro']:.4f}")
-        print(f"  F1 (weighted): {bt['f1_weighted']:.4f}")
-        report = bt["classification_report"]
-        print("  Per-class F1:")
-        for k, v in report.items():
-            if isinstance(v, dict) and "f1-score" in v:
-                print(
-                    f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
-                )
+    if "bb_type" in results:
+        bt = results["bb_type"]
+        print(f"\n--- bb_type (multi-class, n={bt['n_samples']:,}) ---")
+        if bt["n_samples"] > 0:
+            print(f"  Accuracy   : {bt['accuracy']:.4f}")
+            print(f"  F1 (macro) : {bt['f1_macro']:.4f}")
+            print(f"  F1 (weighted): {bt['f1_weighted']:.4f}")
+            report = bt["classification_report"]
+            print("  Per-class F1:")
+            for k, v in report.items():
+                if isinstance(v, dict) and "f1-score" in v:
+                    print(
+                        f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
+                    )
 
     # regression
-    reg = results["regression"]
-    print("\n--- regression (original scale) ---")
-    for col, m in reg.items():
-        if m["n_samples"] == 0:
-            print(f"  {col}: no valid samples")
-            continue
-        print(f"  {col} (n={m['n_samples']:,}):")
-        print(f"    MAE  : {m['mae']:.2f}")
-        print(f"    RMSE : {m['rmse']:.2f}")
-        print(f"    R²   : {m['r2']:.4f}")
+    if "regression" in results:
+        reg = results["regression"]
+        print("\n--- regression (original scale) ---")
+        for col, m in reg.items():
+            if m["n_samples"] == 0:
+                print(f"  {col}: no valid samples")
+                continue
+            print(f"  {col} (n={m['n_samples']:,}):")
+            print(f"    MAE  : {m['mae']:.2f}")
+            print(f"    RMSE : {m['rmse']:.2f}")
+            print(f"    R²   : {m['r2']:.4f}")
 
     print("\n" + "=" * 70)
 
@@ -350,16 +365,19 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     norm_stats = {k: tuple(v) for k, v in norm_params["input"].items()}
     reg_norm_stats = {k: tuple(v) for k, v in norm_params["target"].items()}
 
-    # === モデル設定読み込み（シーケンス判定用） ===
+    # === モデル設定読み込み（シーケンス・スコープ判定用） ===
     model_config_path = model_dir / "model_config.json"
     with open(model_config_path) as f:
         saved_model_cfg = json.load(f)
+    model_scope = saved_model_cfg.get("model_scope", "all")
     use_seq = saved_model_cfg.get("max_seq_len", 0) > 0
     max_seq_len = saved_model_cfg.get("max_seq_len", 0)
     use_batter_hist = saved_model_cfg.get("batter_hist_max_atbats", 0) > 0
     batter_hist_max_atbats = saved_model_cfg.get("batter_hist_max_atbats", 0)
     batter_hist_max_pitches = saved_model_cfg.get("batter_hist_max_pitches", 10)
     need_at_bat_id = use_seq or use_batter_hist
+
+    print(f"Model scope: {model_scope}")
 
     # === テストデータ読み込み ===
     print(f"Loading {args.split} data...")
@@ -372,6 +390,11 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
         test_df = all_df[all_df["at_bat_id"].isin(split_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
     del all_df
     print(f"  Samples: {len(test_df):,}")
+
+    # === outcome スコープ: swing_attempt=1 のサンプルのみに絞り込み ===
+    if model_scope == "outcome":
+        test_df = test_df[test_df["swing_attempt"] == 1].reset_index(drop=True)
+        print(f"  Filtered to swing_attempt=1: {len(test_df):,} samples")
 
     # メタデータ列を保存用に抽出（Dataset 構築前に取得）
     sample_meta_arrays = {}
@@ -425,16 +448,20 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
 
     # === 評価 ===
     results = {}
-    results["swing_attempt"] = evaluate_swing_attempt(preds["sa_prob"], preds["sa_true"])
-    results["swing_result"] = evaluate_multiclass(preds["sr_logits"], preds["sr_true"], sr_names, "swing_result")
-    results["bb_type"] = evaluate_multiclass(preds["bt_logits"], preds["bt_true"], bt_names, "bb_type")
-    results["regression"] = evaluate_regression(
-        preds["reg_pred"],
-        preds["reg_true"],
-        preds["reg_mask"],
-        data_cfg.target_reg,
-        reg_norm_stats,
-    )
+    if "sa_prob" in preds:
+        results["swing_attempt"] = evaluate_swing_attempt(preds["sa_prob"], preds["sa_true"])
+    if "sr_logits" in preds:
+        results["swing_result"] = evaluate_multiclass(preds["sr_logits"], preds["sr_true"], sr_names, "swing_result")
+    if "bt_logits" in preds:
+        results["bb_type"] = evaluate_multiclass(preds["bt_logits"], preds["bt_true"], bt_names, "bb_type")
+    if "reg_pred" in preds:
+        results["regression"] = evaluate_regression(
+            preds["reg_pred"],
+            preds["reg_true"],
+            preds["reg_mask"],
+            data_cfg.target_reg,
+            reg_norm_stats,
+        )
 
     print_results(results)
 
@@ -470,6 +497,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
                         cat_label_maps[col] = {int(row["class_label"]): str(row["value"]) for _, row in sub.iterrows()}
 
         meta = {
+            "model_scope": model_scope,
             "sr_names": sr_names,
             "bt_names": bt_names,
             "reg_cols": list(data_cfg.target_reg),

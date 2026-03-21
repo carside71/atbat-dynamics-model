@@ -50,7 +50,15 @@ models/
 </table>
 </div>
 
-### 出力（全構成共通）
+### 出力
+
+出力辞書に含まれるキーは `model_scope` 設定によって変化します。
+
+| `model_scope` | 出力キー | 用途 |
+|---|---|---|
+| `all`（デフォルト） | `swing_attempt`, `swing_result`, `bb_type`, `regression` | 全タスク統合モデル |
+| `swing_attempt` | `swing_attempt` | スイング判定専用モデル |
+| `outcome` | `swing_result`, `bb_type`, `regression` | スイング後の結果予測専用モデル |
 
 | キー | 形状 | 内容 |
 |---|---|---|
@@ -181,7 +189,13 @@ YAML の `backbone_type` で選択。
 
 ### 3. Head Strategy (`components/head_strategies.py`)
 
-YAML の `head_strategy` で選択。
+YAML の `head_strategy` で選択。`model_scope` に応じて構築されるヘッドが変化します。
+
+| `model_scope` | `independent` | `cascade` |
+|---|---|---|
+| `all` | 4ヘッド並列（従来動作） | SA→SR→BT→Reg カスケード（従来動作） |
+| `swing_attempt` | SA ヘッドのみ | SA ヘッドのみ |
+| `outcome` | SR + BT + Reg ヘッド並列 | SR→BT→Reg カスケード（SA なし） |
 
 #### `independent` — 独立ヘッド（デフォルト）
 
@@ -250,6 +264,7 @@ YAML の `head_strategy` で選択。
 </div>
 
 - **カスケードの流れ**: `h → SA → [h,sa] → SR → [h,sr] → BT → [h,bt] → Reg`
+- **`model_scope="outcome"` 時**: SA ヘッドが省略され `h → SR → [h,sr] → BT → [h,bt] → Reg` となる
 - **`detach_cascade`**: `true` にすると上流ヘッドからの勾配を `detach` し、下流ヘッド学習時に上流を更新しない
 - **設計意図**: スイング試行 → スイング結果 → 打球タイプ → 回帰値 という因果構造を反映
 
@@ -397,6 +412,7 @@ YAML の `regression_head_type` で選択。
 
 | フィールド | デフォルト | 選択肢 | 説明 |
 |---|---|---|---|
+| `model_scope` | `"all"` | `"all"`, `"swing_attempt"`, `"outcome"` | 予測タスクの範囲 |
 | `backbone_type` | `"resdnn"` | `"dnn"`, `"resdnn"` | Backbone の種類 |
 | `backbone_hidden` | `[512, 256, 128]` | — | 各層の隠れ次元 |
 | `dropout` | `0.2` | — | Dropout 率 |
@@ -498,6 +514,28 @@ model:
   batter_hist_num_layers: 1
 ```
 
+#### swing_attempt 専用モデル
+
+```yaml
+model:
+  model_scope: swing_attempt
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+```
+
+#### outcome 専用モデル（swing_attempt=1 サンプルのみで学習）
+
+```yaml
+model:
+  model_scope: outcome
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+```
+
 #### 新しい組み合わせ例: ResBlock + カスケード + MDN
 
 ```yaml
@@ -585,6 +623,6 @@ HEAD_STRATEGY_REGISTRY["my_strategy"] = MyHeadStrategy
 | 項目 | 要件 |
 |------|------|
 | Backbone | `__init__(input_dim, hidden_dims, dropout)` / `output_dim` プロパティ / `forward(x) → Tensor` |
-| HeadStrategy | `__init__(cfg, backbone_out)` / `forward(h) → dict` |
+| HeadStrategy | `__init__(cfg, backbone_out)` / `forward(h) → dict`（`model_scope` に応じたキーを返す） |
 | SeqEncoder | `BaseSeqEncoder` 継承 / `output_dim` プロパティ / `forward(seq_pitch_type, seq_cont, seq_swing_attempt, seq_swing_result, seq_mask) → Tensor` |
-| 出力 dict keys | `swing_attempt`, `swing_result`, `bb_type`, `regression` |
+| 出力 dict keys | `model_scope` に応じたサブセット: `swing_attempt`, `swing_result`, `bb_type`, `regression` |

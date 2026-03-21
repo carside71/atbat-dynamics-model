@@ -71,8 +71,20 @@ class DataConfig:
     )
 
 
+_VALID_MODEL_SCOPES = {"all", "swing_attempt", "outcome"}
+
+
+def validate_model_scope(scope: str) -> None:
+    """model_scope の値を検証する."""
+    if scope not in _VALID_MODEL_SCOPES:
+        raise ValueError(f"Invalid model_scope={scope!r}. Must be one of {_VALID_MODEL_SCOPES}")
+
+
 @dataclass
 class ModelConfig:
+    # モデルスコープ: "all"=全タスク統合, "swing_attempt"=SA予測のみ, "outcome"=SR/BT/Reg予測のみ
+    model_scope: str = "all"
+
     # カテゴリカル特徴量の埋め込み次元（実行時に stats から自動設定）
     embedding_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
 

@@ -42,6 +42,18 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 
 階層的マスク付き損失を使い、スイングしなかった場合の swing_result や、インプレーにならなかった場合の bb_type / 回帰ターゲットは損失計算から除外されます。
 
+### モデルスコープ（model_scope）
+
+`model_scope` 設定により、予測タスクの範囲を切り替えて **分離学習** が可能です。
+
+| `model_scope` | 予測対象 | 学習データ | 用途 |
+|---|---|---|---|
+| `all`（デフォルト） | 全4タスク | 全サンプル | 統合モデル（従来動作） |
+| `swing_attempt` | swing_attempt のみ | 全サンプル | スイング判定の専用モデル |
+| `outcome` | swing_result + bb_type + regression | swing_attempt=1 のみ | スイング後の結果予測専用モデル |
+
+`swing_attempt` モデルと `outcome` モデルを別々に学習することで、各タスクに最適化された専用モデルを構築できます。
+
 ## プロジェクト構成
 
 ```
@@ -51,6 +63,8 @@ atbat-dynamics-model/
 │   ├── dnn_change_loss_w.yaml
 │   ├── dnn_mdn.yaml
 │   ├── resdnn.yaml
+│   ├── resdnn_swing_attempt.yaml
+│   ├── resdnn_outcome.yaml
 │   ├── resdnn_cascade.yaml
 │   ├── resdnn_focal.yaml
 │   ├── seq_resdnn.yaml
@@ -87,6 +101,9 @@ atbat-dynamics-model/
 │       ├── graph_export.py      # モデルグラフ可視化
 │       ├── logging.py           # ログ出力
 │       └── model_io.py          # モデル構築・保存・復元
+├── tests/
+│   ├── conftest.py              # テスト用共通 fixture
+│   └── test_model_scope.py      # model_scope 関連テスト
 ├── notes/                       # データ構築・分析ノートブック
 │   ├── 00_build_dataset/        #   前処理パイプライン
 │   ├── 01_analysis/             #   データ分析
@@ -145,7 +162,8 @@ data:
   split_dir: /workspace/datasets/statcast-customized/split
 
 model:
-  architecture: atbat_resdnn     # モデル名
+  model_scope: all               # "all" | "swing_attempt" | "outcome"
+  backbone_type: resdnn           # "dnn" | "resdnn"
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2
@@ -165,8 +183,14 @@ train:
 ## 学習
 
 ```bash
-# YAML 設定ファイルを指定して実行
+# YAML 設定ファイルを指定して実行（全タスク統合モデル）
 python3 src/train.py --config configs/resdnn.yaml
+
+# swing_attempt 専用モデルの学習
+python3 src/train.py --config configs/resdnn_swing_attempt.yaml
+
+# outcome 専用モデルの学習（swing_attempt=1 のサンプルのみ使用）
+python3 src/train.py --config configs/resdnn_outcome.yaml
 
 # デフォルト設定で実行（YAML 不要）
 python3 src/train.py
@@ -242,14 +266,17 @@ python3 src/test.py --config configs/resdnn.yaml --save-predictions
 
 すべてのモデルは **埋め込み → バックボーン → マルチヘッド** の3段構成で、レジストリパターンで管理されています。
 
-| `architecture` | 設定ファイル例 | 説明 |
+| 設定ファイル例 | scope | 説明 |
 |---|---|---|
-| `atbat_dnn` | `dnn.yaml` | 基本マルチヘッド DNN (ReLU + BatchNorm) |
-| `atbat_dnn_mdn` | `dnn_mdn.yaml` | 回帰ヘッドを MDN に置換 |
-| `atbat_resdnn` | `resdnn.yaml` | 残差接続 + GELU + LayerNorm |
-| `atbat_resdnn_cascade` | `resdnn_cascade.yaml` | 上記 + カスケードヘッド（ヘッド間情報伝達） |
-| `atbat_seq_resdnn` | `seq_resdnn.yaml` | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
-| `atbat_seq_resdnn_batter_hist` | `seq_resdnn_batter_hist.yaml` | 上記 + 階層 GRU 打者履歴エンコーダ |
+| `dnn.yaml` | all | 基本マルチヘッド DNN (ReLU + BatchNorm) |
+| `dnn_mdn.yaml` | all | 回帰ヘッドを MDN に置換 |
+| `resdnn.yaml` | all | 残差接続 + GELU + LayerNorm |
+| `resdnn_swing_attempt.yaml` | swing_attempt | ResBlock + swing_attempt 専用モデル |
+| `resdnn_outcome.yaml` | outcome | ResBlock + outcome 専用モデル（SA=1 サンプルのみ） |
+| `resdnn_cascade.yaml` | all | ResBlock + カスケードヘッド（ヘッド間情報伝達） |
+| `resdnn_focal.yaml` | all | ResBlock + Focal Loss |
+| `seq_resdnn.yaml` | all | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
+| `seq_resdnn_batter_hist.yaml` | all | 上記 + 階層 GRU 打者履歴エンコーダ |
 
 各モデルのアーキテクチャ詳細・図解・追加方法は [src/models/README.md](src/models/README.md) を参照してください。
 
