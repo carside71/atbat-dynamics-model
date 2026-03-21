@@ -45,6 +45,7 @@ def compute_loss(
     train_cfg: TrainConfig,
     loss_fn_sr: nn.Module | None = None,
     loss_fn_bt: nn.Module | None = None,
+    physics_loss_fn: nn.Module | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """階層的マスク付き損失を計算する.
 
@@ -113,6 +114,13 @@ def compute_loss(
             loss_reg = torch.tensor(0.0, device=device)
         losses["regression"] = loss_reg.item()
         total = total + train_cfg.loss_weight_regression * loss_reg
+
+    # 5. physics consistency loss
+    if physics_loss_fn is not None and train_cfg.loss_weight_physics > 0:
+        if "bb_type" in outputs and "regression" in outputs:
+            loss_phys = physics_loss_fn(outputs, batch)
+            losses["physics"] = loss_phys.item()
+            total = total + train_cfg.loss_weight_physics * loss_phys
 
     losses["total"] = total.item()
 

@@ -70,11 +70,31 @@ $$
 
 元の 9 クラスを以下の 3 クラスに統合しています。
 
-| 統合後 | 元クラス |
+| 統合後 | クラスインデックス | 元クラス |
+|---|---|---|
+| **foul** | 0 | foul, foul_bunt, foul_tip, foul_pitchout |
+| **hit_into_play** | 1 | hit_into_play, hit_into_play_score, hit_into_play_no_out, bunt_foul_tip |
+| **miss** | 2 | swinging_strike, swinging_strike_blocked, missed_bunt, swinging_pitchout |
+
+### bb_type クラスと物理的定義
+
+打球タイプは Statcast の打出角（launch_angle）基準で以下のように定義されます。`PhysicsConsistencyLoss` はこの対応関係を利用して分類予測と回帰予測の整合性を強制します。
+
+| クラス | クラスインデックス | launch_angle 範囲（Statcast 基準） |
+|---|---|---|
+| **ground_ball** | 0 | < 10° |
+| **fly_ball** | 1 | 25° < LA ≤ 50° |
+| **line_drive** | 2 | 10° ≤ LA ≤ 25° |
+| **popup** | 3 | > 50° |
+
+### spray_angle とフェアゾーン
+
+spray_angle（打球方向角度）はフェアゾーンとファウルゾーンの判別に使われます。`PhysicsConsistencyLoss` では以下の制約を適用します。
+
+| swing_result | spray_angle の期待範囲 |
 |---|---|
-| **foul** | foul, foul_bunt, foul_tip, foul_pitchout |
-| **hit_into_play** | hit_into_play, hit_into_play_score, hit_into_play_no_out, bunt_foul_tip |
-| **miss** | swinging_strike, swinging_strike_blocked, missed_bunt, swinging_pitchout |
+| **hit_into_play** (cls 1) | -45° ≤ SA ≤ +45°（フェアゾーン） |
+| **foul** (cls 0) | SA < -45° or SA > +45°（ファウルゾーン） |
 
 ---
 

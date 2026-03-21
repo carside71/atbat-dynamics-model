@@ -42,6 +42,19 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 
 階層的マスク付き損失を使い、スイングしなかった場合の swing_result や、インプレーにならなかった場合の bb_type / 回帰ターゲットは損失計算から除外されます。
 
+### 物理的整合性損失（Physics Consistency Loss）
+
+分類予測と回帰予測を独立に学習すると、「ゴロ（ground_ball）と予測しているのに打出角（launch_angle）がフライの値」といった物理的に矛盾した出力が発生し得ます。`PhysicsConsistencyLoss` はこの問題に対処する補助損失で、以下の物理制約をソフトペナルティとして課します。
+
+| 制約 | 分類ヘッド | 回帰ターゲット | 物理的定義（Statcast 基準） |
+|---|---|---|---|
+| 打球タイプ × 打出角 | bb_type | launch_angle | GB: < 10°, LD: 10°〜25°, FB: 25°〜50°, PU: > 50° |
+| スイング結果 × 打球方向 | swing_result | spray_angle | hit_into_play: フェア内 (±45°), foul: フェア外 |
+
+- 分類ロジットの **softmax 確率** で重み付けし、`torch.relu` ベースの微分可能ペナルティを計算するため、分類・回帰の両ヘッドに勾配が伝播します
+- MDN（Mixture Density Network）ヘッドにも対応: 混合分布の期待値 E[y] = Σ π_k * μ_k を使用
+- `loss_weight_physics: 0.0`（デフォルト）で無効、`0.001`〜`0.01` 程度で有効化を推奨
+
 ### モデルスコープ（model_scope）
 
 `model_scope` 設定により、予測タスクの範囲を切り替えて **分離学習** が可能です。
@@ -66,6 +79,7 @@ atbat-dynamics-model/
 │   ├── resdnn_swing_attempt.yaml
 │   ├── resdnn_outcome.yaml
 │   ├── resdnn_cascade.yaml
+│   ├── resdnn_cascade_physics.yaml
 │   ├── resdnn_focal.yaml
 │   ├── seq_resdnn.yaml
 │   ├── seq_resdnn_batter_hist.yaml
@@ -88,7 +102,8 @@ atbat-dynamics-model/
 │   │   └── statcast_batter_hist.py # StatcastBatterHistDataset（打者履歴対応）
 │   ├── losses/                  # 損失関数
 │   │   ├── focal.py             #   Focal Loss
-│   │   └── multi_task.py        #   マルチタスク損失 & MDN 損失
+│   │   ├── multi_task.py        #   マルチタスク損失 & MDN 損失
+│   │   └── physics.py           #   物理的整合性損失（PhysicsConsistencyLoss）
 │   ├── models/                  # モデルアーキテクチャ
 │   │   ├── README.md
 │   │   ├── atbat_dnn.py         #   基本マルチヘッド DNN
@@ -103,7 +118,8 @@ atbat-dynamics-model/
 │       └── model_io.py          # モデル構築・保存・復元
 ├── tests/
 │   ├── conftest.py              # テスト用共通 fixture
-│   └── test_model_scope.py      # model_scope 関連テスト
+│   ├── test_model_scope.py      # model_scope 関連テスト
+│   └── test_physics_loss.py     # PhysicsConsistencyLoss テスト
 ├── notes/                       # データ構築・分析ノートブック
 │   ├── 00_build_dataset/        #   前処理パイプライン
 │   ├── 01_analysis/             #   データ分析
@@ -177,6 +193,8 @@ train:
   focal_gamma: 0.0       # > 0 で Focal Loss 有効
   use_class_weight: false # true でクラス頻度の逆数重み付け
   label_smoothing: 0.0   # > 0 で Label Smoothing 有効（0.1 程度が一般的）
+  loss_weight_physics: 0.0      # > 0 で物理的整合性損失を有効化（0.001〜0.01 推奨）
+  physics_margin_degrees: 2.0   # 境界付近のマージン（度）
 ```
 
 設定可能な全フィールドは `src/config.py` および `configs/` 内の各 YAML ファイルを参照してください。
@@ -275,6 +293,7 @@ python3 src/test.py --config configs/resdnn.yaml --save-predictions
 | `resdnn_swing_attempt.yaml` | swing_attempt | ResBlock + swing_attempt 専用モデル |
 | `resdnn_outcome.yaml` | outcome | ResBlock + outcome 専用モデル（SA=1 サンプルのみ） |
 | `resdnn_cascade.yaml` | all | ResBlock + カスケードヘッド（ヘッド間情報伝達） |
+| `resdnn_cascade_physics.yaml` | all | ResBlock + カスケード + 物理的整合性損失 |
 | `resdnn_focal.yaml` | all | ResBlock + Focal Loss |
 | `seq_resdnn.yaml` | all | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
 | `seq_resdnn_batter_hist.yaml` | all | 上記 + 階層 GRU 打者履歴エンコーダ |

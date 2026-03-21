@@ -1,0 +1,74 @@
+# AtBat Dynamics Model 設定ファイル (ResBlock + Cascade + Physics Consistency Loss)
+# カスケードヘッドに加え、分類予測と回帰予測の物理的整合性を損失関数で強制する構成
+
+data:
+  data_dir: /workspace/datasets/statcast-customized/data
+  stats_dir: /workspace/datasets/statcast-customized/stats
+  split_dir: /workspace/datasets/statcast-customized/split
+  output_dir: /workspace/outputs
+
+  categorical_features:
+    - p_throws
+    - pitch_type
+    - batter
+    - stand
+    - base_out_state
+    - count_state
+  continuous_features:
+    - release_speed
+    - release_spin_rate
+    - pfx_x
+    - pfx_z
+    - plate_x
+    - plate_z
+    - vx0
+    - vy0
+    - vz0
+    - ax
+    - ay
+    - az
+    - sz_top
+    - sz_bot
+    - plate_z_norm
+  ordinal_features:
+    - inning_clipped
+    - is_inning_top
+    - diff_score_clipped
+    - pitch_number_clipped
+
+  target_cls_swing_attempt: swing_attempt
+  target_cls_swing_result: swing_result
+  target_cls_bb_type: bb_type
+  target_reg:
+    - launch_speed
+    - launch_angle
+    - hit_distance_sc
+    - spray_angle
+
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  head_strategy: cascade
+  detach_cascade: true
+
+train:
+  batch_size: 4096
+  num_epochs: 30
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  num_workers: 4
+  device: cuda
+
+  loss_weight_swing_attempt: 1.0
+  loss_weight_swing_result: 1.0
+  loss_weight_bb_type: 1.0
+  loss_weight_regression: 0.01
+  label_smoothing: 0.1
+
+  # Physics Consistency Loss
+  # 分類予測（bb_type, swing_result）と回帰予測（launch_angle, spray_angle）の
+  # 物理的整合性を強制するペナルティ損失
+  loss_weight_physics: 0.01       # 0.0 で無効。0.001〜0.01 程度が推奨
+  physics_margin_degrees: 2.0     # 境界付近のマージン（度）。大きいほど緩やか

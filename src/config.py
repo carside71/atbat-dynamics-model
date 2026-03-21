@@ -144,6 +144,10 @@ class TrainConfig:
     # Label Smoothing
     label_smoothing: float = 0.0  # 0.0 で無効、0.1 程度が一般的
 
+    # Physics Consistency Loss
+    loss_weight_physics: float = 0.0  # 0.0 で無効（後方互換）
+    physics_margin_degrees: float = 2.0  # 境界付近のマージン（度）
+
 
 def _apply_overrides(obj: Any, overrides: dict) -> None:
     """辞書の値をdataclassフィールドに適用する."""

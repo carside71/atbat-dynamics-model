@@ -26,7 +26,7 @@ from datasets import (
     load_split_at_bat_ids,
     load_stats,
 )
-from losses import FocalLoss, compute_loss
+from losses import FocalLoss, PhysicsConsistencyLoss, compute_loss
 from utils.logging import tee_logging
 from utils.model_io import build_model, save_model_config
 
@@ -98,6 +98,8 @@ def _format_loss_parts(metrics: dict[str, float], scope: str) -> str:
         parts.append(f"SR={metrics.get('swing_result', 0.0):.4f}")
         parts.append(f"BT={metrics.get('bb_type', 0.0):.4f}")
         parts.append(f"Reg={metrics.get('regression', 0.0):.4f}")
+    if "physics" in metrics:
+        parts.append(f"Phys={metrics['physics']:.4f}")
     return " ".join(parts)
 
 
@@ -113,6 +115,7 @@ def evaluate(
     loss_fn_bt: nn.Module | None = None,
     use_seq: bool = False,
     use_batter_hist: bool = False,
+    physics_loss_fn: nn.Module | None = None,
 ) -> dict[str, float]:
     """検証データで評価を行い、損失とメトリクスを返す."""
     model.eval()
@@ -128,7 +131,7 @@ def evaluate(
         batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
-        _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
+        _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
         for k, v in losses.items():
             total_losses[k] = total_losses.get(k, 0.0) + v
         n_batches += 1
@@ -250,6 +253,16 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     with open(output_dir / "norm_params.json", "w") as f:
         json.dump(norm_params, f, indent=2)
 
+    # === Physics Consistency Loss（正規化パラメータが必要なためここで構築）===
+    physics_loss_fn = None
+    if train_cfg.loss_weight_physics > 0:
+        physics_loss_fn = PhysicsConsistencyLoss(
+            reg_norm_stats=reg_norm_stats,
+            target_reg_columns=data_cfg.target_reg,
+            margin=train_cfg.physics_margin_degrees,
+        )
+        # device への移動はモデル構築後に実施
+
     # === Dataset & DataLoader ===
     print("Building datasets...")
     if use_batter_hist:
@@ -304,6 +317,9 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     model = build_model(data_cfg, model_cfg, stats)
     model = model.to(device)
 
+    if physics_loss_fn is not None:
+        physics_loss_fn = physics_loss_fn.to(device)
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Total params: {total_params:,}  Trainable: {trainable_params:,}")
@@ -317,10 +333,13 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         print(f"  Using FocalLoss (gamma={train_cfg.focal_gamma}, class_weight={train_cfg.use_class_weight})")
     if train_cfg.label_smoothing > 0:
         print(f"  Label Smoothing: {train_cfg.label_smoothing}")
-    print(
+    loss_weight_str = (
         f"  Loss weights: SA={train_cfg.loss_weight_swing_attempt}, SR={train_cfg.loss_weight_swing_result}, "
         f"BT={train_cfg.loss_weight_bb_type}, Reg={train_cfg.loss_weight_regression}"
     )
+    if train_cfg.loss_weight_physics > 0:
+        loss_weight_str += f", Physics={train_cfg.loss_weight_physics}"
+    print(loss_weight_str)
 
     # === 学習 ===
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay)
@@ -341,7 +360,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
             optimizer.zero_grad()
             outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
-            loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt)
+            loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -365,7 +384,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
         # 検証
         val_metrics = evaluate(
-            model, val_loader, train_cfg, data_cfg, device, model_scope, loss_fn_sr, loss_fn_bt, use_seq, use_batter_hist
+            model, val_loader, train_cfg, data_cfg, device, model_scope, loss_fn_sr, loss_fn_bt, use_seq, use_batter_hist,
+            physics_loss_fn,
         )
 
         record = {"epoch": epoch, "lr": scheduler.get_last_lr()[0]}

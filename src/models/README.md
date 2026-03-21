@@ -536,6 +536,24 @@ model:
   dropout: 0.2
 ```
 
+#### ResBlock + カスケード + 物理的整合性損失
+
+```yaml
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  head_strategy: cascade
+  detach_cascade: true
+
+train:
+  loss_weight_physics: 0.01       # 物理的整合性損失の重み（0.0 で無効）
+  physics_margin_degrees: 2.0     # 境界マージン（度）
+```
+
+bb_type と launch_angle、swing_result と spray_angle の間の物理的整合性をソフトペナルティで強制する。分類予測の softmax 確率で重み付けした `torch.relu` ベースの微分可能ペナルティを既存のタスク損失に加算する。MDN ヘッドにも対応（期待値 E[y] = Σ π_k * μ_k を使用）。
+
 #### 新しい組み合わせ例: ResBlock + カスケード + MDN
 
 ```yaml
