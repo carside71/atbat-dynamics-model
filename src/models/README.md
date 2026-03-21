@@ -57,7 +57,7 @@ models/
 | `swing_attempt` | `(B,)` | スイング試行 logit (binary) |
 | `swing_result` | `(B, num_swing_result)` | スイング結果 logits |
 | `bb_type` | `(B, num_bb_type)` | 打球タイプ logits |
-| `regression` | `(B, 3)` or `dict` | launch_speed, launch_angle, hit_distance_sc（MDN の場合は `pi`, `mu`, `sigma` の dict） |
+| `regression` | `(B, D)` or `dict` | launch_speed, launch_angle, hit_distance_sc, hc_x, hc_y（MDN の場合は `pi`, `mu`, `sigma` の dict）。D = `num_reg_targets`（デフォルト 5） |
 
 ---
 
@@ -207,7 +207,7 @@ YAML の `head_strategy` で選択。
 <tr>
   <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>MLP / MDN</b></td>
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression <code>(B, 3)</code></td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression <code>(B, D)</code></td>
 </tr>
 </table>
 </div>
@@ -244,7 +244,7 @@ YAML の `head_strategy` で選択。
   <td colspan="2" style="border:none;"></td>
   <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>Reg Head</b></td>
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression <code>(B, D)</code></td>
 </tr>
 </table>
 </div>
@@ -261,7 +261,7 @@ YAML の `regression_head_type` で選択。
 
 #### `mlp`（デフォルト）
 
-通常の MLP ヘッド。出力 `(B, 3)`。
+通常の MLP ヘッド。出力 `(B, D)`。D = `num_reg_targets`（デフォルト 5）。
 
 #### `mdn` — Mixture Density Network
 
@@ -280,13 +280,13 @@ YAML の `regression_head_type` で選択。
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
   <td style="background:#fff3e0; border:1px solid #ffe0b2; border-radius:6px; padding:4px 10px; font-size:13px; text-align:center;">fc_mu → <b>reshape</b></td>
   <td style="border:none; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>μ</b> (B, K, 3) 平均</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>μ</b> (B, K, D) 平均</td>
 </tr>
 <tr>
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
   <td style="background:#fff3e0; border:1px solid #ffe0b2; border-radius:6px; padding:4px 10px; font-size:13px; text-align:center;">fc_sigma → <b>Softplus</b></td>
   <td style="border:none; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>σ</b> (B, K, 3) 標準偏差</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>σ</b> (B, K, D) 標準偏差</td>
 </tr>
 </table>
 </div>
@@ -370,11 +370,11 @@ YAML の `regression_head_type` で選択。
 </tr>
 <tr>
   <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
-    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1)</span>
+    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1) + hc_x (1) + hc_y (1)</span>
   </td>
 </tr>
 <tr>
-  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 6)</td>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 8)</td>
 </tr>
 <tr>
   <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
@@ -574,7 +574,7 @@ class MyHeadStrategy(nn.Module):
             "swing_attempt": ...,  # (B,) logits
             "swing_result": ...,   # (B, num_swing_result) logits
             "bb_type": ...,        # (B, num_bb_type) logits
-            "regression": ...,     # (B, 3) or dict
+            "regression": ...,     # (B, D) or dict
         }
 
 HEAD_STRATEGY_REGISTRY["my_strategy"] = MyHeadStrategy

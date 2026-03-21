@@ -25,28 +25,51 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, TrainConfig, load_config
-from datasets import StatcastDataset, StatcastSequenceDataset, load_all_parquet_files, load_split_at_bat_ids, load_stats
+from datasets import (
+    StatcastBatterHistDataset,
+    StatcastDataset,
+    StatcastSequenceDataset,
+    load_all_parquet_files,
+    load_split_at_bat_ids,
+    load_stats,
+)
 from utils.logging import tee_logging
 from utils.model_io import load_trained_model
 
 
 def _model_forward(
-    model: nn.Module, batch: dict[str, torch.Tensor], data_cfg: DataConfig, use_seq: bool
+    model: nn.Module,
+    batch: dict[str, torch.Tensor],
+    data_cfg: DataConfig,
+    use_seq: bool,
+    use_batter_hist: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """モデルの forward を呼び出す（シーケンス対応）."""
+    """モデルの forward を呼び出す（シーケンス・打者履歴対応）."""
     cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
+    kwargs = {}
     if use_seq:
-        return model(
-            cat_dict,
-            batch["cont"],
-            batch["ord"],
+        kwargs.update(
             seq_pitch_type=batch["seq_pitch_type"],
             seq_cont=batch["seq_cont"],
             seq_swing_attempt=batch["seq_swing_attempt"],
             seq_swing_result=batch["seq_swing_result"],
             seq_mask=batch["seq_mask"],
         )
-    return model(cat_dict, batch["cont"], batch["ord"])
+    if use_batter_hist:
+        kwargs.update(
+            hist_pitch_type=batch["hist_pitch_type"],
+            hist_cont=batch["hist_cont"],
+            hist_swing_attempt=batch["hist_swing_attempt"],
+            hist_swing_result=batch["hist_swing_result"],
+            hist_bb_type=batch["hist_bb_type"],
+            hist_launch_speed=batch["hist_launch_speed"],
+            hist_launch_angle=batch["hist_launch_angle"],
+            hist_hc_x=batch["hist_hc_x"],
+            hist_hc_y=batch["hist_hc_y"],
+            hist_pitch_mask=batch["hist_pitch_mask"],
+            hist_atbat_mask=batch["hist_atbat_mask"],
+        )
+    return model(cat_dict, batch["cont"], batch["ord"], **kwargs)
 
 
 @torch.no_grad()
@@ -56,6 +79,7 @@ def collect_predictions(
     data_cfg: DataConfig,
     device: torch.device,
     use_seq: bool = False,
+    use_batter_hist: bool = False,
     save_inputs: bool = False,
 ) -> dict[str, np.ndarray]:
     """全バッチの予測とラベルを収集する."""
@@ -71,7 +95,7 @@ def collect_predictions(
 
     for batch in tqdm(loader, desc="Predicting"):
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        outputs = _model_forward(model, batch, data_cfg, use_seq)
+        outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
         all_sa_prob.append(outputs["swing_attempt"].sigmoid().cpu().numpy())
         all_sa_true.append(batch["swing_attempt"].cpu().numpy())
@@ -332,13 +356,17 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
         saved_model_cfg = json.load(f)
     use_seq = saved_model_cfg.get("max_seq_len", 0) > 0
     max_seq_len = saved_model_cfg.get("max_seq_len", 0)
+    use_batter_hist = saved_model_cfg.get("batter_hist_max_atbats", 0) > 0
+    batter_hist_max_atbats = saved_model_cfg.get("batter_hist_max_atbats", 0)
+    batter_hist_max_pitches = saved_model_cfg.get("batter_hist_max_pitches", 10)
+    need_at_bat_id = use_seq or use_batter_hist
 
     # === テストデータ読み込み ===
     print(f"Loading {args.split} data...")
     all_df = load_all_parquet_files(data_cfg.data_dir)
     split_ids = load_split_at_bat_ids(data_cfg.split_dir, args.split)
 
-    if use_seq:
+    if need_at_bat_id:
         test_df = all_df[all_df["at_bat_id"].isin(split_ids)].reset_index(drop=True)
     else:
         test_df = all_df[all_df["at_bat_id"].isin(split_ids)].drop(columns=["at_bat_id"]).reset_index(drop=True)
@@ -363,7 +391,17 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
         else:
             sample_meta_arrays["meta_game_date"] = np.full(len(test_df), "", dtype="U10")
 
-    if use_seq:
+    if use_batter_hist:
+        test_ds = StatcastBatterHistDataset(
+            test_df,
+            data_cfg,
+            max_seq_len,
+            batter_hist_max_atbats,
+            batter_hist_max_pitches,
+            norm_stats,
+            reg_norm_stats,
+        )
+    elif use_seq:
         test_ds = StatcastSequenceDataset(test_df, data_cfg, max_seq_len, norm_stats, reg_norm_stats)
     else:
         test_ds = StatcastDataset(test_df, data_cfg, norm_stats, reg_norm_stats)
@@ -383,7 +421,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     model = load_trained_model(model_path, model_config_path, device)
 
     # === 予測収集 ===
-    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, save_inputs=args.save_predictions)
+    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, use_batter_hist, save_inputs=args.save_predictions)
 
     # === 評価 ===
     results = {}

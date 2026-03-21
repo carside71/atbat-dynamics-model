@@ -54,6 +54,8 @@ def create_dummy_inputs(
         kwargs["hist_bb_type"] = torch.zeros(batch_size, N, dtype=torch.long, device=device)
         kwargs["hist_launch_speed"] = torch.zeros(batch_size, N, device=device)
         kwargs["hist_launch_angle"] = torch.zeros(batch_size, N, device=device)
+        kwargs["hist_hc_x"] = torch.zeros(batch_size, N, device=device)
+        kwargs["hist_hc_y"] = torch.zeros(batch_size, N, device=device)
         kwargs["hist_pitch_mask"] = torch.ones(batch_size, N, P, device=device)
         kwargs["hist_atbat_mask"] = torch.ones(batch_size, N, device=device)
 

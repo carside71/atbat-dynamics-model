@@ -65,6 +65,8 @@ class DataConfig:
             "launch_speed",
             "launch_angle",
             "hit_distance_sc",
+            "hc_x",
+            "hc_y",
         ]
     )
 
@@ -88,6 +90,7 @@ class ModelConfig:
     # Regression Head
     regression_head_type: str = "mlp"  # "mlp" | "mdn"
     mdn_num_components: int = 5  # mdn 時のみ有効
+    num_reg_targets: int = 3  # target_reg の数（実行時に自動設定）
 
     # 出力クラス数（実行時に自動設定）
     num_swing_result: int = 3

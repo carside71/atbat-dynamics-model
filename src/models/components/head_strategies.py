@@ -24,12 +24,12 @@ class IndependentHeadStrategy(nn.Module):
             self.head_regression = MDNHead(
                 in_dim=backbone_out,
                 hidden_dims=cfg.head_hidden,
-                out_dim=3,
+                out_dim=cfg.num_reg_targets,
                 num_components=cfg.mdn_num_components,
                 dropout=cfg.dropout,
             )
         else:
-            self.head_regression = build_mlp_head(backbone_out, cfg.head_hidden, 3, cfg.dropout, activation)
+            self.head_regression = build_mlp_head(backbone_out, cfg.head_hidden, cfg.num_reg_targets, cfg.dropout, activation)
 
     def forward(self, h: torch.Tensor) -> dict[str, torch.Tensor]:
         return {
@@ -67,12 +67,12 @@ class CascadeHeadStrategy(nn.Module):
             self.head_regression = MDNHead(
                 in_dim=reg_in_dim,
                 hidden_dims=cfg.head_hidden,
-                out_dim=3,
+                out_dim=cfg.num_reg_targets,
                 num_components=cfg.mdn_num_components,
                 dropout=cfg.dropout,
             )
         else:
-            self.head_regression = build_mlp_head(reg_in_dim, cfg.head_hidden, 3, cfg.dropout, activation)
+            self.head_regression = build_mlp_head(reg_in_dim, cfg.head_hidden, cfg.num_reg_targets, cfg.dropout, activation)
 
     def forward(self, h: torch.Tensor) -> dict[str, torch.Tensor]:
         detach = self.detach_cascade

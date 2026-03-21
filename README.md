@@ -38,7 +38,7 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 | swing_attempt | スイングしたか | 二値分類 |
 | swing_result | スイング結果（foul, hit_into_play, miss） | 3クラス分類 |
 | bb_type | 打球種別（ground_ball, fly_ball, line_drive, popup） | 4クラス分類 |
-| regression | launch_speed, launch_angle, hit_distance_sc | 回帰 |
+| regression | launch_speed, launch_angle, hit_distance_sc, hc_x, hc_y | 回帰 |
 
 階層的マスク付き損失を使い、スイングしなかった場合の swing_result や、インプレーにならなかった場合の bb_type / 回帰ターゲットは損失計算から除外されます。
 
@@ -54,7 +54,8 @@ atbat-dynamics-model/
 │   ├── resdnn_cascade.yaml
 │   ├── resdnn_focal.yaml
 │   ├── seq_resdnn.yaml
-│   └── seq_resdnn_batter_hist.yaml
+│   ├── seq_resdnn_batter_hist.yaml
+│   └── seq_resdnn_mdn_cascade_batter_hist.yaml
 ├── docs/                        # GitHub Pages デモサイト
 │   ├── index.html               #   リダイレクトページ
 │   └── viewer_ohtani.html       #   Prediction Viewer デモ
@@ -368,7 +369,7 @@ python3 tools/generate_viewer.py \
 - **Swing Attempt**: 予測確率バー + GT との正誤
 - **Swing Result**: 3クラス確率バー（foul / hit_into_play / miss）
 - **BB Type**: 4クラス確率バー（ground_ball / fly_ball / line_drive / popup）
-- **Regression**: launch_speed / launch_angle / hit_distance の予測値・GT・誤差
+- **Regression**: launch_speed / launch_angle / hit_distance / hc_x / hc_y の予測値・GT・誤差
 
 ### 操作方法
 

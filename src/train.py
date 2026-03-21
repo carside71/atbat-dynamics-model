@@ -65,6 +65,8 @@ def _model_forward(
             hist_bb_type=batch["hist_bb_type"],
             hist_launch_speed=batch["hist_launch_speed"],
             hist_launch_angle=batch["hist_launch_angle"],
+            hist_hc_x=batch["hist_hc_x"],
+            hist_hc_y=batch["hist_hc_y"],
             hist_pitch_mask=batch["hist_pitch_mask"],
             hist_atbat_mask=batch["hist_atbat_mask"],
         )
@@ -268,6 +270,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     )
 
     # === モデル構築 ===
+    model_cfg.num_reg_targets = len(data_cfg.target_reg)
     print("Building model...")
     model = build_model(data_cfg, model_cfg, stats)
     model = model.to(device)

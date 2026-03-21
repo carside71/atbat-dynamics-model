@@ -65,6 +65,7 @@ def save_model_config(model_cfg: ModelConfig, data_cfg: DataConfig, output_dir: 
         "batter_hist_max_pitches": model_cfg.batter_hist_max_pitches,
         "batter_hist_hidden_dim": model_cfg.batter_hist_hidden_dim,
         "batter_hist_num_layers": model_cfg.batter_hist_num_layers,
+        "num_reg_targets": model_cfg.num_reg_targets,
     }
     with open(output_dir / "model_config.json", "w") as f:
         json.dump(model_info, f, indent=2)
@@ -101,6 +102,7 @@ def load_trained_model(
         batter_hist_max_pitches=saved.get("batter_hist_max_pitches", 10),
         batter_hist_hidden_dim=saved.get("batter_hist_hidden_dim", 64),
         batter_hist_num_layers=saved.get("batter_hist_num_layers", 1),
+        num_reg_targets=saved.get("num_reg_targets", 3),
     )
     model = create_model(model_cfg, saved["num_cont"], saved["num_ord"])
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))

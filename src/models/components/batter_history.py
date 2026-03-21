@@ -37,7 +37,7 @@ class HierarchicalGRUBatterHistoryEncoder(nn.Module):
 
         bb_embed_dim = 4
         self.bb_type_embed = nn.Embedding(cfg.num_bb_type + 1, bb_embed_dim)
-        atbat_vec_dim = cfg.batter_hist_hidden_dim + bb_embed_dim + 2
+        atbat_vec_dim = cfg.batter_hist_hidden_dim + bb_embed_dim + 4
 
         self.outer_gru = nn.GRU(
             input_size=atbat_vec_dim,
@@ -61,6 +61,8 @@ class HierarchicalGRUBatterHistoryEncoder(nn.Module):
         hist_bb_type: torch.Tensor,
         hist_launch_speed: torch.Tensor,
         hist_launch_angle: torch.Tensor,
+        hist_hc_x: torch.Tensor,
+        hist_hc_y: torch.Tensor,
         hist_pitch_mask: torch.Tensor,
         hist_atbat_mask: torch.Tensor,
     ) -> torch.Tensor:
@@ -105,7 +107,7 @@ class HierarchicalGRUBatterHistoryEncoder(nn.Module):
         bb_emb = self.bb_type_embed(bb)
 
         atbat_vecs = torch.cat(
-            [inner_out, bb_emb, hist_launch_speed.unsqueeze(-1), hist_launch_angle.unsqueeze(-1)],
+            [inner_out, bb_emb, hist_launch_speed.unsqueeze(-1), hist_launch_angle.unsqueeze(-1), hist_hc_x.unsqueeze(-1), hist_hc_y.unsqueeze(-1)],
             dim=-1,
         )
 
