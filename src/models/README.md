@@ -65,7 +65,7 @@ models/
 | `swing_attempt` | `(B,)` | スイング試行 logit (binary) |
 | `swing_result` | `(B, num_swing_result)` | スイング結果 logits |
 | `bb_type` | `(B, num_bb_type)` | 打球タイプ logits |
-| `regression` | `(B, D)` or `dict` | launch_speed, launch_angle, hit_distance_sc, hc_x, hc_y（MDN の場合は `pi`, `mu`, `sigma` の dict）。D = `num_reg_targets`（デフォルト 5） |
+| `regression` | `(B, D)` or `dict` | launch_speed, launch_angle, hit_distance_sc, spray_angle（MDN の場合は `pi`, `mu`, `sigma` の dict）。D = `num_reg_targets`（デフォルト 4） |
 
 ---
 
@@ -276,7 +276,7 @@ YAML の `regression_head_type` で選択。
 
 #### `mlp`（デフォルト）
 
-通常の MLP ヘッド。出力 `(B, D)`。D = `num_reg_targets`（デフォルト 5）。
+通常の MLP ヘッド。出力 `(B, D)`。D = `num_reg_targets`（デフォルト 4）。
 
 #### `mdn` — Mixture Density Network
 
@@ -385,11 +385,11 @@ YAML の `regression_head_type` で選択。
 </tr>
 <tr>
   <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
-    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1) + hc_x (1) + hc_y (1)</span>
+    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1) + spray_angle (1)</span>
   </td>
 </tr>
 <tr>
-  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 8)</td>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 7)</td>
 </tr>
 <tr>
   <td colspan="3" style="border:none; text-align:center; padding:2px 0;">

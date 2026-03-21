@@ -38,7 +38,7 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 | swing_attempt | スイングしたか | 二値分類 |
 | swing_result | スイング結果（foul, hit_into_play, miss） | 3クラス分類 |
 | bb_type | 打球種別（ground_ball, fly_ball, line_drive, popup） | 4クラス分類 |
-| regression | launch_speed, launch_angle, hit_distance_sc, hc_x, hc_y | 回帰 |
+| regression | launch_speed, launch_angle, hit_distance_sc, spray_angle | 回帰 |
 
 階層的マスク付き損失を使い、スイングしなかった場合の swing_result や、インプレーにならなかった場合の bb_type / 回帰ターゲットは損失計算から除外されます。
 
@@ -110,6 +110,7 @@ atbat-dynamics-model/
 │   └── locals/                  #   ローカル実行用スクリプト
 ├── scripts/
 │   ├── add_game_info_and_rebuild.py  # game_pk/game_date 付与 & 時系列分割 & 打者履歴構築
+│   ├── add_spray_angle.py            # hc_x/hc_y から spray_angle を計算して Parquet に追加
 │   ├── export_model_graph.py    # モデルグラフ構造の画像出力
 │   ├── run_container_mac.sh     # Mac 用コンテナ起動
 │   └── run_container_wsl.sh     # WSL 用コンテナ起動
@@ -258,7 +259,7 @@ python3 src/test.py --config configs/resdnn.yaml --save-predictions
 
 データ分割は **時系列分割**（`game_date` ベース）で行われます。学習データは 2024-06-30 以前、検証データは 2024-07-01〜2024-10-30、テストデータは 2025-03-15 以降です。ダブルヘッダーを正しく区別するため `game_pk`（試合ごとに一意な ID）を使用します。
 
-前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。打者履歴テーブルの構築は `scripts/add_game_info_and_rebuild.py` で行います。
+前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。打者履歴テーブルの構築は `scripts/add_game_info_and_rebuild.py`、打球方向角度（spray_angle）の算出は `scripts/add_spray_angle.py` で行います。
 
 データセットクラスや読み込みユーティリティの詳細は [src/datasets/README.md](src/datasets/README.md) を参照してください。
 
@@ -396,7 +397,7 @@ python3 tools/generate_viewer.py \
 - **Swing Attempt**: 予測確率バー + GT との正誤
 - **Swing Result**: 3クラス確率バー（foul / hit_into_play / miss）
 - **BB Type**: 4クラス確率バー（ground_ball / fly_ball / line_drive / popup）
-- **Regression**: launch_speed / launch_angle / hit_distance / hc_x / hc_y の予測値・GT・誤差
+- **Regression**: launch_speed / launch_angle / hit_distance / spray_angle の予測値・GT・誤差
 
 ### 操作方法
 

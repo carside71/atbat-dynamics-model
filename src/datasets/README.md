@@ -131,7 +131,7 @@ $$
 │   swing_attempt (0/1), swing_result (0-8 / -1), │
 │   bb_type (0-3 / -1),                           │
 │   reg_targets (launch_speed, launch_angle,      │
-│                hit_distance_sc, hc_x, hc_y)    │
+│                hit_distance_sc, spray_angle)    │
 │   reg_mask (各回帰ターゲットの有効フラグ)            │
 └─────────────────────────────────────────────────┘
 ```
@@ -232,8 +232,7 @@ ds = StatcastSequenceDataset(df, data_cfg, max_seq_len=10, norm_stats=norm_stats
 | `hist_bb_type` | `(N,)` | 打球種別（ground_ball 等） |
 | `hist_launch_speed` | `(N,)` | 打球速度（正規化済み） |
 | `hist_launch_angle` | `(N,)` | 打球角度（正規化済み） |
-| `hist_hc_x` | `(N,)` | 打球着地 X 座標（正規化済み） |
-| `hist_hc_y` | `(N,)` | 打球着地 Y 座標（正規化済み） |
+| `hist_spray_angle` | `(N,)` | 打球方向角度（正規化済み） |
 | `hist_pitch_mask` | `(N, P)` | 投球レベルの有効マスク |
 | `hist_atbat_mask` | `(N,)` | 打席レベルの有効マスク |
 

@@ -65,8 +65,7 @@ def _model_forward(
             hist_bb_type=batch["hist_bb_type"],
             hist_launch_speed=batch["hist_launch_speed"],
             hist_launch_angle=batch["hist_launch_angle"],
-            hist_hc_x=batch["hist_hc_x"],
-            hist_hc_y=batch["hist_hc_y"],
+            hist_spray_angle=batch["hist_spray_angle"],
             hist_pitch_mask=batch["hist_pitch_mask"],
             hist_atbat_mask=batch["hist_atbat_mask"],
         )

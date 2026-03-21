@@ -43,8 +43,7 @@ data:
     - launch_speed
     - launch_angle
     - hit_distance_sc
-    - hc_x
-    - hc_y
+    - spray_angle
 
 model:
   backbone_type: dnn

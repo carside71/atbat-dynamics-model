@@ -243,8 +243,7 @@ class StatcastBatterHistDataset(Dataset):
         hist_bb_type = self.bb_type[last_tensor]
         hist_launch_speed = self.reg_targets[last_tensor, 0]
         hist_launch_angle = self.reg_targets[last_tensor, 1]
-        hist_hc_x = self.reg_targets[last_tensor, 3]
-        hist_hc_y = self.reg_targets[last_tensor, 4]
+        hist_spray_angle = self.reg_targets[last_tensor, 3]
 
         # 現在の投球の特徴量
         cat = {col: self.cat_features[col][idx] for col in self.cfg.categorical_features}
@@ -272,8 +271,7 @@ class StatcastBatterHistDataset(Dataset):
             "hist_bb_type": hist_bb_type,
             "hist_launch_speed": hist_launch_speed,
             "hist_launch_angle": hist_launch_angle,
-            "hist_hc_x": hist_hc_x,
-            "hist_hc_y": hist_hc_y,
+            "hist_spray_angle": hist_spray_angle,
             "hist_pitch_mask": hist_pitch_mask,
             "hist_atbat_mask": hist_atbat_mask,
         }

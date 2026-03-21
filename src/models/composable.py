@@ -75,8 +75,7 @@ class ComposableModel(nn.Module):
         hist_bb_type: torch.Tensor | None = None,
         hist_launch_speed: torch.Tensor | None = None,
         hist_launch_angle: torch.Tensor | None = None,
-        hist_hc_x: torch.Tensor | None = None,
-        hist_hc_y: torch.Tensor | None = None,
+        hist_spray_angle: torch.Tensor | None = None,
         hist_pitch_mask: torch.Tensor | None = None,
         hist_atbat_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -105,8 +104,7 @@ class ComposableModel(nn.Module):
                     hist_bb_type,
                     hist_launch_speed,
                     hist_launch_angle,
-                    hist_hc_x,
-                    hist_hc_y,
+                    hist_spray_angle,
                     hist_pitch_mask,
                     hist_atbat_mask,
                 )

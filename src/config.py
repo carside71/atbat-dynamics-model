@@ -65,8 +65,7 @@ class DataConfig:
             "launch_speed",
             "launch_angle",
             "hit_distance_sc",
-            "hc_x",
-            "hc_y",
+            "spray_angle",
         ]
     )
 

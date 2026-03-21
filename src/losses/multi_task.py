@@ -102,7 +102,7 @@ def compute_loss(
 
     # 4. regression
     if "regression" in outputs:
-        reg_mask = batch["reg_mask"]  # (B, 3)
+        reg_mask = batch["reg_mask"]  # (B, D)
         reg_out = outputs["regression"]
         if isinstance(reg_out, dict):
             loss_reg = mdn_loss(reg_out, batch["reg_targets"], reg_mask)
