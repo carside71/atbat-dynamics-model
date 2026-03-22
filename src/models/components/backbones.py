@@ -3,15 +3,9 @@
 import torch
 import torch.nn as nn
 
-BACKBONE_REGISTRY: dict[str, type[nn.Module]] = {}
+from utils.registry import make_registry
 
-
-def register_backbone(name: str):
-    def wrapper(cls: type[nn.Module]):
-        BACKBONE_REGISTRY[name] = cls
-        return cls
-
-    return wrapper
+BACKBONE_REGISTRY, register_backbone = make_registry()
 
 
 @register_backbone("dnn")

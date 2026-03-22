@@ -18,15 +18,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, ModelConfig, TrainConfig, load_config, validate_model_scope
 from datasets import (
-    StatcastBatterHistDataset,
-    StatcastDataset,
-    StatcastSequenceDataset,
     compute_normalization_stats,
+    create_dataset,
     load_all_parquet_files,
     load_split_at_bat_ids,
     load_stats,
 )
 from losses import FocalLoss, PhysicsConsistencyLoss, compute_loss
+from utils.inference import model_forward, move_batch_to_device
 from utils.logging import tee_logging
 from utils.model_io import build_model, save_model_config
 
@@ -36,40 +35,6 @@ def _build_class_weights(stats: dict[str, pd.DataFrame], key: str, device: torch
     counts = stats[key]["count"].to_numpy(dtype=np.float64)
     weights = counts.sum() / (len(counts) * counts)
     return torch.tensor(weights, dtype=torch.float32, device=device)
-
-
-def _model_forward(
-    model: nn.Module,
-    batch: dict[str, torch.Tensor],
-    data_cfg: DataConfig,
-    use_seq: bool,
-    use_batter_hist: bool = False,
-) -> dict[str, torch.Tensor]:
-    """モデルの forward を呼び出す（シーケンス・打者履歴対応）."""
-    cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
-    kwargs = {}
-    if use_seq:
-        kwargs.update(
-            seq_pitch_type=batch["seq_pitch_type"],
-            seq_cont=batch["seq_cont"],
-            seq_swing_attempt=batch["seq_swing_attempt"],
-            seq_swing_result=batch["seq_swing_result"],
-            seq_mask=batch["seq_mask"],
-        )
-    if use_batter_hist:
-        kwargs.update(
-            hist_pitch_type=batch["hist_pitch_type"],
-            hist_cont=batch["hist_cont"],
-            hist_swing_attempt=batch["hist_swing_attempt"],
-            hist_swing_result=batch["hist_swing_result"],
-            hist_bb_type=batch["hist_bb_type"],
-            hist_launch_speed=batch["hist_launch_speed"],
-            hist_launch_angle=batch["hist_launch_angle"],
-            hist_spray_angle=batch["hist_spray_angle"],
-            hist_pitch_mask=batch["hist_pitch_mask"],
-            hist_atbat_mask=batch["hist_atbat_mask"],
-        )
-    return model(cat_dict, batch["cont"], batch["ord"], **kwargs)
 
 
 def _build_loss_functions(
@@ -128,8 +93,8 @@ def evaluate(
     bt_correct, bt_total = 0, 0
 
     for batch in loader:
-        batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+        batch = move_batch_to_device(batch, device)
+        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
         _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
         for k, v in losses.items():
@@ -265,31 +230,13 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
     # === Dataset & DataLoader ===
     print("Building datasets...")
-    if use_batter_hist:
-        train_ds = StatcastBatterHistDataset(
-            train_df,
-            data_cfg,
-            model_cfg.max_seq_len,
-            model_cfg.batter_hist_max_atbats,
-            model_cfg.batter_hist_max_pitches,
-            norm_stats,
-            reg_norm_stats,
-        )
-        val_ds = StatcastBatterHistDataset(
-            val_df,
-            data_cfg,
-            model_cfg.max_seq_len,
-            model_cfg.batter_hist_max_atbats,
-            model_cfg.batter_hist_max_pitches,
-            norm_stats,
-            reg_norm_stats,
-        )
-    elif use_seq:
-        train_ds = StatcastSequenceDataset(train_df, data_cfg, model_cfg.max_seq_len, norm_stats, reg_norm_stats)
-        val_ds = StatcastSequenceDataset(val_df, data_cfg, model_cfg.max_seq_len, norm_stats, reg_norm_stats)
-    else:
-        train_ds = StatcastDataset(train_df, data_cfg, norm_stats, reg_norm_stats)
-        val_ds = StatcastDataset(val_df, data_cfg, norm_stats, reg_norm_stats)
+    ds_kwargs = dict(
+        max_seq_len=model_cfg.max_seq_len,
+        batter_hist_max_atbats=model_cfg.batter_hist_max_atbats,
+        batter_hist_max_pitches=model_cfg.batter_hist_max_pitches,
+    )
+    train_ds = create_dataset(train_df, data_cfg, norm_stats, reg_norm_stats, **ds_kwargs)
+    val_ds = create_dataset(val_df, data_cfg, norm_stats, reg_norm_stats, **ds_kwargs)
     del train_df, val_df  # メモリ解放
 
     use_persistent = train_cfg.num_workers > 0
@@ -356,10 +303,10 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{train_cfg.num_epochs}")
         for batch in pbar:
-            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            batch = move_batch_to_device(batch, device)
 
             optimizer.zero_grad()
-            outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+            outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
             loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)

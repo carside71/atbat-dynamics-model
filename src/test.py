@@ -26,49 +26,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import DataConfig, TrainConfig, load_config
 from datasets import (
-    StatcastBatterHistDataset,
-    StatcastDataset,
-    StatcastSequenceDataset,
+    create_dataset,
     load_all_parquet_files,
     load_split_at_bat_ids,
     load_stats,
 )
+from utils.inference import model_forward, move_batch_to_device
 from utils.logging import tee_logging
 from utils.model_io import load_trained_model
-
-
-def _model_forward(
-    model: nn.Module,
-    batch: dict[str, torch.Tensor],
-    data_cfg: DataConfig,
-    use_seq: bool,
-    use_batter_hist: bool = False,
-) -> dict[str, torch.Tensor]:
-    """モデルの forward を呼び出す（シーケンス・打者履歴対応）."""
-    cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
-    kwargs = {}
-    if use_seq:
-        kwargs.update(
-            seq_pitch_type=batch["seq_pitch_type"],
-            seq_cont=batch["seq_cont"],
-            seq_swing_attempt=batch["seq_swing_attempt"],
-            seq_swing_result=batch["seq_swing_result"],
-            seq_mask=batch["seq_mask"],
-        )
-    if use_batter_hist:
-        kwargs.update(
-            hist_pitch_type=batch["hist_pitch_type"],
-            hist_cont=batch["hist_cont"],
-            hist_swing_attempt=batch["hist_swing_attempt"],
-            hist_swing_result=batch["hist_swing_result"],
-            hist_bb_type=batch["hist_bb_type"],
-            hist_launch_speed=batch["hist_launch_speed"],
-            hist_launch_angle=batch["hist_launch_angle"],
-            hist_spray_angle=batch["hist_spray_angle"],
-            hist_pitch_mask=batch["hist_pitch_mask"],
-            hist_atbat_mask=batch["hist_atbat_mask"],
-        )
-    return model(cat_dict, batch["cont"], batch["ord"], **kwargs)
 
 
 @torch.no_grad()
@@ -93,8 +58,8 @@ def collect_predictions(
     all_ord: list[np.ndarray] = [] if save_inputs else []
 
     for batch in tqdm(loader, desc="Predicting"):
-        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        outputs = _model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+        batch = move_batch_to_device(batch, device)
+        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
         if "swing_attempt" in outputs:
             all_sa_prob.append(outputs["swing_attempt"].sigmoid().cpu().numpy())
@@ -413,20 +378,12 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
         else:
             sample_meta_arrays["meta_game_date"] = np.full(len(test_df), "", dtype="U10")
 
-    if use_batter_hist:
-        test_ds = StatcastBatterHistDataset(
-            test_df,
-            data_cfg,
-            max_seq_len,
-            batter_hist_max_atbats,
-            batter_hist_max_pitches,
-            norm_stats,
-            reg_norm_stats,
-        )
-    elif use_seq:
-        test_ds = StatcastSequenceDataset(test_df, data_cfg, max_seq_len, norm_stats, reg_norm_stats)
-    else:
-        test_ds = StatcastDataset(test_df, data_cfg, norm_stats, reg_norm_stats)
+    test_ds = create_dataset(
+        test_df, data_cfg, norm_stats, reg_norm_stats,
+        max_seq_len=max_seq_len,
+        batter_hist_max_atbats=batter_hist_max_atbats,
+        batter_hist_max_pitches=batter_hist_max_pitches,
+    )
     del test_df
 
     test_loader = DataLoader(

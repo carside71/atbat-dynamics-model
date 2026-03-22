@@ -4,16 +4,9 @@ import torch
 import torch.nn as nn
 
 from config import ModelConfig
+from utils.registry import make_registry
 
-SEQ_ENCODER_REGISTRY: dict[str, type[nn.Module]] = {}
-
-
-def register_seq_encoder(name: str):
-    def wrapper(cls: type[nn.Module]):
-        SEQ_ENCODER_REGISTRY[name] = cls
-        return cls
-
-    return wrapper
+SEQ_ENCODER_REGISTRY, register_seq_encoder = make_registry()
 
 
 class BaseSeqEncoder(nn.Module):

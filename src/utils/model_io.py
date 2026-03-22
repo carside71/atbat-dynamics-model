@@ -1,5 +1,6 @@
 """モデルの構築・保存・復元ユーティリティ."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -41,33 +42,13 @@ def build_model(data_cfg: DataConfig, model_cfg: ModelConfig, stats: dict) -> nn
 
 def save_model_config(model_cfg: ModelConfig, data_cfg: DataConfig, output_dir: Path) -> None:
     """モデル設定を model_config.json に保存する."""
-    model_info = {
-        "model_scope": model_cfg.model_scope,
-        "backbone_type": model_cfg.backbone_type,
-        "embedding_dims": model_cfg.embedding_dims,
-        "backbone_hidden": model_cfg.backbone_hidden,
-        "head_hidden": model_cfg.head_hidden,
-        "head_activation": model_cfg.head_activation,
-        "head_strategy": model_cfg.head_strategy,
-        "detach_cascade": model_cfg.detach_cascade,
-        "regression_head_type": model_cfg.regression_head_type,
-        "dropout": model_cfg.dropout,
-        "num_swing_result": model_cfg.num_swing_result,
-        "num_bb_type": model_cfg.num_bb_type,
-        "mdn_num_components": model_cfg.mdn_num_components,
-        "num_cont": len(data_cfg.continuous_features),
-        "num_ord": len(data_cfg.ordinal_features),
-        "max_seq_len": model_cfg.max_seq_len,
-        "seq_encoder_type": model_cfg.seq_encoder_type,
-        "seq_hidden_dim": model_cfg.seq_hidden_dim,
-        "seq_num_layers": model_cfg.seq_num_layers,
-        "seq_bidirectional": model_cfg.seq_bidirectional,
-        "batter_hist_max_atbats": model_cfg.batter_hist_max_atbats,
-        "batter_hist_max_pitches": model_cfg.batter_hist_max_pitches,
-        "batter_hist_hidden_dim": model_cfg.batter_hist_hidden_dim,
-        "batter_hist_num_layers": model_cfg.batter_hist_num_layers,
-        "num_reg_targets": model_cfg.num_reg_targets,
-    }
+    model_info = dataclasses.asdict(model_cfg)
+    # embedding_dims のタプル値を list に変換（JSON 互換性）
+    model_info["embedding_dims"] = {k: list(v) for k, v in model_cfg.embedding_dims.items()}
+    # DataConfig 由来の追加情報
+    model_info["num_cont"] = len(data_cfg.continuous_features)
+    model_info["num_ord"] = len(data_cfg.ordinal_features)
+
     with open(output_dir / "model_config.json", "w") as f:
         json.dump(model_info, f, indent=2)
 
@@ -81,31 +62,14 @@ def load_trained_model(
     with open(model_config_path) as f:
         saved = json.load(f)
 
-    model_cfg = ModelConfig(
-        model_scope=saved.get("model_scope", "all"),
-        backbone_type=saved.get("backbone_type", "resdnn"),
-        embedding_dims={k: tuple(v) for k, v in saved["embedding_dims"].items()},
-        backbone_hidden=saved["backbone_hidden"],
-        head_hidden=saved["head_hidden"],
-        head_activation=saved.get("head_activation", "gelu"),
-        head_strategy=saved.get("head_strategy", "independent"),
-        detach_cascade=saved.get("detach_cascade", True),
-        regression_head_type=saved.get("regression_head_type", "mlp"),
-        dropout=saved["dropout"],
-        num_swing_result=saved["num_swing_result"],
-        num_bb_type=saved["num_bb_type"],
-        mdn_num_components=saved.get("mdn_num_components", 5),
-        max_seq_len=saved.get("max_seq_len", 0),
-        seq_encoder_type=saved.get("seq_encoder_type", "gru"),
-        seq_hidden_dim=saved.get("seq_hidden_dim", 64),
-        seq_num_layers=saved.get("seq_num_layers", 1),
-        seq_bidirectional=saved.get("seq_bidirectional", False),
-        batter_hist_max_atbats=saved.get("batter_hist_max_atbats", 0),
-        batter_hist_max_pitches=saved.get("batter_hist_max_pitches", 10),
-        batter_hist_hidden_dim=saved.get("batter_hist_hidden_dim", 64),
-        batter_hist_num_layers=saved.get("batter_hist_num_layers", 1),
-        num_reg_targets=saved.get("num_reg_targets", 3),
-    )
+    # embedding_dims の list → tuple 変換
+    saved["embedding_dims"] = {k: tuple(v) for k, v in saved["embedding_dims"].items()}
+
+    # ModelConfig のフィールド名を取得し、saved から該当するもののみ抽出
+    cfg_fields = {f.name for f in dataclasses.fields(ModelConfig)}
+    cfg_kwargs = {k: v for k, v in saved.items() if k in cfg_fields}
+    model_cfg = ModelConfig(**cfg_kwargs)
+
     model = create_model(model_cfg, saved["num_cont"], saved["num_ord"])
     model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.to(device)
