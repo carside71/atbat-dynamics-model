@@ -2,9 +2,7 @@
 # swing_result / bb_type / regression を予測する（swing_attempt=1 サンプルのみ）
 
 data:
-  data_dir: /workspace/datasets/statcast-customized/data
-  stats_dir: /workspace/datasets/statcast-customized/stats
-  split_dir: /workspace/datasets/statcast-customized/split
+  dataset_dir: /workspace/datasets/statcast-customized-v2
   output_dir: /workspace/outputs
 
   categorical_features:

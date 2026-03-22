@@ -39,7 +39,10 @@ def compute_embedding_dim(num_classes: int, max_dim: int = 50) -> int:
 
 
 def load_all_parquet_files(data_dir: Path) -> pd.DataFrame:
-    """data ディレクトリ内の全 parquet ファイルを結合して読み込む."""
+    """データを読み込む。pitches.parquet があればそれを、なければ全 parquet を結合."""
+    single_file = data_dir / "pitches.parquet"
+    if single_file.exists():
+        return pd.read_parquet(single_file)
     files = sorted(glob.glob(str(data_dir / "*.parquet")))
     if not files:
         raise FileNotFoundError(f"No parquet files found in {data_dir}")

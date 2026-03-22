@@ -2,9 +2,7 @@
 # ヘッド間の情報伝達を有効化した改良版
 
 data:
-  data_dir: /workspace/datasets/statcast-customized/data
-  stats_dir: /workspace/datasets/statcast-customized/stats
-  split_dir: /workspace/datasets/statcast-customized/split
+  dataset_dir: /workspace/datasets/statcast-customized-v2
   output_dir: /workspace/outputs
 
   categorical_features:

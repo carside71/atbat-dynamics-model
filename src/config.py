@@ -9,9 +9,7 @@ import yaml
 
 @dataclass
 class DataConfig:
-    data_dir: Path = Path("/workspace/datasets/statcast-customized/data")
-    stats_dir: Path = Path("/workspace/datasets/statcast-customized/stats")
-    split_dir: Path = Path("/workspace/datasets/statcast-customized/split")
+    dataset_dir: Path = Path("/workspace/datasets/statcast-customized-v2")
     output_dir: Path = Path("/workspace/outputs/atbat-dynamics-model")
 
     # 入力特徴量
@@ -53,8 +51,22 @@ class DataConfig:
         ]
     )
 
-    # 打者履歴
-    batter_history_dir: Path = Path("/workspace/datasets/statcast-customized/batter_history")
+    # 後方互換プロパティ
+    @property
+    def data_dir(self) -> Path:
+        return self.dataset_dir
+
+    @property
+    def stats_dir(self) -> Path:
+        return self.dataset_dir
+
+    @property
+    def split_dir(self) -> Path:
+        return self.dataset_dir
+
+    @property
+    def batter_history_dir(self) -> Path:
+        return self.dataset_dir
 
     # ターゲット
     target_cls_swing_attempt: str = "swing_attempt"

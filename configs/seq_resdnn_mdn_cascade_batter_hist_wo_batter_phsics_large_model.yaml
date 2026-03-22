@@ -2,11 +2,8 @@
 # 過去投球系列を GRU でエンコードし、さらに直近50打席の打撃履歴もエンコードして予測
 
 data:
-  data_dir: /workspace/datasets/statcast-customized/data
-  stats_dir: /workspace/datasets/statcast-customized/stats
-  split_dir: /workspace/datasets/statcast-customized/split
+  dataset_dir: /workspace/datasets/statcast-customized-v2
   output_dir: /workspace/outputs
-  batter_history_dir: /workspace/datasets/statcast-customized/batter_history
 
   categorical_features:
     - p_throws

@@ -2,9 +2,7 @@
 # カスケードヘッドに加え、分類予測と回帰予測の物理的整合性を損失関数で強制する構成
 
 data:
-  data_dir: /workspace/datasets/statcast-customized/data
-  stats_dir: /workspace/datasets/statcast-customized/stats
-  split_dir: /workspace/datasets/statcast-customized/split
+  dataset_dir: /workspace/datasets/statcast-customized-v2
   output_dir: /workspace/outputs
 
   categorical_features:
