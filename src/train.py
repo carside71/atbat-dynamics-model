@@ -204,7 +204,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     if model_scope == "outcome":
         train_df = train_df[train_df["swing_attempt"] == 1].reset_index(drop=True)
         val_df = val_df[val_df["swing_attempt"] == 1].reset_index(drop=True)
-        print(f"  Filtered to swing_attempt=1:")
+        print("  Filtered to swing_attempt=1:")
         print(f"    Train samples: {len(train_df):,}")
         print(f"    Val samples: {len(val_df):,}")
 
@@ -331,7 +331,16 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
         # 検証
         val_metrics = evaluate(
-            model, val_loader, train_cfg, data_cfg, device, model_scope, loss_fn_sr, loss_fn_bt, use_seq, use_batter_hist,
+            model,
+            val_loader,
+            train_cfg,
+            data_cfg,
+            device,
+            model_scope,
+            loss_fn_sr,
+            loss_fn_bt,
+            use_seq,
+            use_batter_hist,
             physics_loss_fn,
         )
 
@@ -355,8 +364,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         print(
             f"Epoch {epoch:3d} | "
             f"Train Loss: {avg_train['total']:.4f} ({train_loss_str}) | "
-            f"Val Loss: {val_metrics['total']:.4f} ({val_loss_str})"
-            + (f" | {acc_str}" if acc_str else "")
+            f"Val Loss: {val_metrics['total']:.4f} ({val_loss_str})" + (f" | {acc_str}" if acc_str else "")
         )
 
         # ベストモデル保存

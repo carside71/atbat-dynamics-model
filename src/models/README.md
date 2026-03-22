@@ -11,12 +11,14 @@ models/
   composable.py        # ComposableModel: コンポーネントを組み立てるモデル本体
   components/
     embedding.py       # FeatureEmbedding
-    backbones.py       # DNNBackbone, ResDNNBackbone
+    backbones.py       # DNNBackbone, ResDNNBackbone（レジストリ登録）
     heads.py           # build_mlp_head(), MDNHead
-    seq_encoders.py    # GRUSeqEncoder, TransformerSeqEncoder
+    seq_encoders.py    # GRUSeqEncoder, TransformerSeqEncoder（レジストリ登録）
     batter_history.py  # HierarchicalGRUBatterHistoryEncoder
     head_strategies.py # IndependentHeadStrategy, CascadeHeadStrategy
 ```
+
+レジストリパターンは `utils/registry.py` の `make_registry()` で統一的に管理されています。
 
 ---
 
@@ -570,6 +572,8 @@ model:
 ---
 
 ## コンポーネントの追加方法
+
+Backbone と Sequence Encoder は `utils/registry.py` の `make_registry()` で生成されたレジストリとデコレータで管理されています。`@register_xxx("name")` デコレータを付けてクラスを定義するだけで、YAML から `name` で参照可能になります。
 
 ### 新しい Backbone を追加
 

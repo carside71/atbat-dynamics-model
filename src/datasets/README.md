@@ -102,10 +102,30 @@ spray_angle（打球方向角度）はフェアゾーンとファウルゾーン
 | ファイル | 内容 |
 |---|---|
 | `__init__.py` | パッケージの公開 API（再エクスポート） |
-| `loaders.py` | データ読み込み・統計ユーティリティ関数 |
+| `loaders.py` | データ読み込み・統計ユーティリティ関数 + `create_dataset` ファクトリ |
+| `statcast_base.py` | `StatcastBaseDataset`（共通基底クラス） |
 | `statcast.py` | `StatcastDataset`（単一投球データセット） |
 | `statcast_sequence.py` | `StatcastSequenceDataset`（系列対応データセット） |
 | `statcast_batter_hist.py` | `StatcastBatterHistDataset`（打者履歴対応データセット） |
+
+### クラス継承構造
+
+```
+StatcastBaseDataset (statcast_base.py)
+├── StatcastDataset (statcast.py)
+├── StatcastSequenceDataset (statcast_sequence.py)
+└── StatcastBatterHistDataset (statcast_batter_hist.py)
+```
+
+`StatcastBaseDataset` は全データセット共通の以下の処理を提供します:
+
+- **特徴量初期化**: カテゴリカル・連続値（z-score 正規化）・順序特徴量のテンソル化
+- **ターゲット初期化**: swing_attempt, swing_result, bb_type, 回帰ターゲット（正規化 + マスク）
+- **`_base_item(idx)`**: 共通のサンプル辞書構築
+- **`_build_atbat_groups(at_bat_ids)`**: at_bat_id によるグルーピング（Sequence / BatterHist で使用）
+- **`_build_seq_features(past_indices, max_seq_len)`**: 打席内投球シーケンスの特徴量構築（Sequence / BatterHist で使用）
+
+各サブクラスは基底クラスを継承し、固有の機能のみを追加します。
 
 ---
 
@@ -119,12 +139,13 @@ spray_angle（打球方向角度）はフェアゾーンとファウルゾーン
 | `load_all_parquet_files(data_dir)` | `pitches.parquet`（単一ファイル）を読み込み。存在しない場合は全 parquet を結合 |
 | `load_split_at_bat_ids(split_dir, split)` | train/valid/test の `at_bat_id` 集合を読み込み |
 | `compute_normalization_stats(df, columns)` | 指定カラムの平均・標準偏差を計算 |
+| `create_dataset(df, data_cfg, ...)` | 設定に基づき適切なデータセットクラスを自動選択・インスタンス化 |
 
 ---
 
 ## StatcastDataset
 
-**各投球を独立したサンプルとして扱う**標準データセット。
+`StatcastBaseDataset` を継承。**各投球を独立したサンプルとして扱う**標準データセット。
 
 ### 入力特徴量
 
@@ -163,13 +184,17 @@ from datasets import StatcastDataset, load_all_parquet_files, compute_normalizat
 df = load_all_parquet_files(data_dir)
 norm_stats = compute_normalization_stats(df, continuous_features)
 ds = StatcastDataset(df, data_cfg, norm_stats, reg_norm_stats)
+
+# または create_dataset ファクトリを使用（train.py / test.py と同じ方法）
+from datasets import create_dataset
+ds = create_dataset(df, data_cfg, norm_stats, reg_norm_stats)  # max_seq_len=0 でデフォルト
 ```
 
 ---
 
 ## StatcastSequenceDataset
 
-**同一打席（at_bat_id）内の過去投球を系列として提供する**データセット。
+`StatcastBaseDataset` を継承。**同一打席（at_bat_id）内の過去投球を系列として提供する**データセット。
 各サンプルは「現在の投球の特徴量」に加えて「過去投球の系列データ」を含む。
 
 ### 仕組み
@@ -207,13 +232,17 @@ from datasets import StatcastSequenceDataset
 
 # at_bat_id 列を保持したままの DataFrame を渡す
 ds = StatcastSequenceDataset(df, data_cfg, max_seq_len=10, norm_stats=norm_stats)
+
+# または create_dataset ファクトリを使用
+from datasets import create_dataset
+ds = create_dataset(df, data_cfg, norm_stats, reg_norm_stats, max_seq_len=10)
 ```
 
 ---
 
 ## StatcastBatterHistDataset
 
-**打者の過去打席履歴（生投球データ）を提供する**データセット。
+`StatcastBaseDataset` を継承。**打者の過去打席履歴（生投球データ）を提供する**データセット。
 `StatcastSequenceDataset` の全機能に加え、当該試合以前の過去 N 打席分の Statcast 生データを返す。
 
 ### 仕組み
@@ -266,8 +295,14 @@ from datasets import StatcastBatterHistDataset
 
 ds = StatcastBatterHistDataset(
     df, data_cfg, max_seq_len=10, norm_stats=norm_stats,
-    batter_history_dir="/path/to/batter_history",
     batter_hist_max_atbats=50,
     batter_hist_max_pitches=10,
+)
+
+# または create_dataset ファクトリを使用
+from datasets import create_dataset
+ds = create_dataset(
+    df, data_cfg, norm_stats, reg_norm_stats,
+    max_seq_len=10, batter_hist_max_atbats=50, batter_hist_max_pitches=10,
 )
 ```

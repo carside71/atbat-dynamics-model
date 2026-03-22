@@ -96,7 +96,8 @@ atbat-dynamics-model/
 │   ├── test.py                  # テスト・性能評価スクリプト
 │   ├── datasets/                # データセット & 前処理
 │   │   ├── README.md
-│   │   ├── loaders.py           #   データ読み込みユーティリティ
+│   │   ├── loaders.py           #   データ読み込み・統計・ファクトリ（create_dataset）
+│   │   ├── statcast_base.py     #   StatcastBaseDataset（共通基底クラス）
 │   │   ├── statcast.py          #   StatcastDataset（単一投球）
 │   │   ├── statcast_sequence.py #   StatcastSequenceDataset（系列対応）
 │   │   └── statcast_batter_hist.py # StatcastBatterHistDataset（打者履歴対応）
@@ -104,18 +105,22 @@ atbat-dynamics-model/
 │   │   ├── focal.py             #   Focal Loss
 │   │   ├── multi_task.py        #   マルチタスク損失 & MDN 損失
 │   │   └── physics.py           #   物理的整合性損失（PhysicsConsistencyLoss）
-│   ├── models/                  # モデルアーキテクチャ
+│   ├── models/                  # モデルアーキテクチャ（コンポーネントベース）
 │   │   ├── README.md
-│   │   ├── atbat_dnn.py         #   基本マルチヘッド DNN
-│   │   ├── atbat_dnn_mdn.py     #   DNN + MDN 回帰ヘッド
-│   │   ├── atbat_resdnn.py      #   残差接続 + GELU
-│   │   ├── atbat_resdnn_cascade.py  # カスケードヘッド付き
-│   │   ├── atbat_seq_resdnn.py  #   系列エンコーダ + ResBlock
-│   │   └── atbat_seq_resdnn_batter_hist.py # 打者履歴エンコーダ付き
+│   │   ├── composable.py        #   ComposableModel（コンポーネント組み立て）
+│   │   └── components/          #   各コンポーネント
+│   │       ├── embedding.py     #     FeatureEmbedding
+│   │       ├── backbones.py     #     DNNBackbone, ResDNNBackbone
+│   │       ├── heads.py         #     build_mlp_head(), MDNHead
+│   │       ├── head_strategies.py #   IndependentHeadStrategy, CascadeHeadStrategy
+│   │       ├── seq_encoders.py  #     GRUSeqEncoder, TransformerSeqEncoder
+│   │       └── batter_history.py #    HierarchicalGRUBatterHistoryEncoder
 │   └── utils/
 │       ├── graph_export.py      # モデルグラフ可視化
+│       ├── inference.py         # 推論ユーティリティ（model_forward 等）
 │       ├── logging.py           # ログ出力
-│       └── model_io.py          # モデル構築・保存・復元
+│       ├── model_io.py          # モデル構築・保存・復元
+│       └── registry.py          # コンポーネントレジストリファクトリ
 ├── tests/
 │   ├── conftest.py              # テスト用共通 fixture
 │   ├── test_model_scope.py      # model_scope 関連テスト
@@ -306,7 +311,7 @@ run_pipeline()
 
 ## モデル
 
-すべてのモデルは **埋め込み → バックボーン → マルチヘッド** の3段構成で、レジストリパターンで管理されています。
+すべてのモデルは `ComposableModel` が **埋め込み → バックボーン → マルチヘッド** の各コンポーネントを YAML 設定に基づいて組み立てる構成で、レジストリパターン (`utils/registry.py`) で管理されています。
 
 | 設定ファイル例 | scope | 説明 |
 |---|---|---|
