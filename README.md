@@ -122,16 +122,23 @@ atbat-dynamics-model/
 │   └── test_physics_loss.py     # PhysicsConsistencyLoss テスト
 ├── notes/                       # データ構築・分析ノートブック
 │   ├── 00_build_dataset/        #   前処理パイプライン
+│   │   └── build_dataset.ipynb  #     データセット構築ノートブック
 │   ├── 01_analysis/             #   データ分析
 │   └── locals/                  #   ローカル実行用スクリプト
 ├── scripts/
-│   ├── add_game_info_and_rebuild.py  # game_pk/game_date 付与 & 時系列分割 & 打者履歴構築
-│   ├── add_spray_angle.py            # hc_x/hc_y から spray_angle を計算して Parquet に追加
 │   ├── export_model_graph.py    # モデルグラフ構造の画像出力
 │   ├── run_container_mac.sh     # Mac 用コンテナ起動
 │   └── run_container_wsl.sh     # WSL 用コンテナ起動
 ├── tools/
-│   ├── build_metadata.py        # ビューア用メタデータ構築（選手名・試合情報）
+│   ├── build_dataset/           # データセット構築パイプライン
+│   │   ├── columns.py           #   カラム名定数・マッピング定義
+│   │   ├── step_filter.py       #   Step 1: 打者フィルタ
+│   │   ├── step_features.py     #   Step 2: 特徴量エンジニアリング
+│   │   ├── step_labels.py       #   Step 3: ラベル生成・エンコーディング
+│   │   ├── step_splits.py       #   Step 4: 分割・打者履歴・保存
+│   │   ├── step_validate.py     #   Step 5: データ品質レポート
+│   │   └── pipeline.py          #   パイプラインオーケストレータ
+│   ├── build_metadata.py        # ビューア用選手名メタデータ構築
 │   ├── generate_viewer.py       # 予測ビューア HTML 生成 CLI
 │   ├── viewer_builder.py        # データ変換・HTML 組み立て
 │   └── viewer_template.html     # ビューア HTML テンプレート
@@ -174,9 +181,7 @@ YAML ファイル（`configs/` ディレクトリ）で `data`, `model`, `train`
 
 ```yaml
 data:
-  data_dir: /workspace/datasets/statcast-customized/data
-  stats_dir: /workspace/datasets/statcast-customized/stats
-  split_dir: /workspace/datasets/statcast-customized/split
+  dataset_dir: /workspace/datasets/statcast-customized-v2
 
 model:
   model_scope: all               # "all" | "swing_attempt" | "outcome"
@@ -266,18 +271,36 @@ python3 src/test.py --config configs/resdnn.yaml --save-predictions
 
 ## データセット
 
-`/workspace/datasets/statcast-customized/` に配置された Statcast データを使用します。
+`/workspace/datasets/statcast-customized-v2/` にフラット構造で配置されたデータセットを使用します。
 
-| ディレクトリ | 内容 |
+| ファイル | 内容 |
 |---|---|
-| `data/` | 年月別の Parquet ファイル（例: `statcast_2024_04.parquet`） |
-| `stats/` | カテゴリカル特徴量のラベル対応テーブル（CSV） |
-| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV）※時系列分割 |
-| `batter_history/` | 打者履歴ルックアップテーブル（Parquet） |
+| `pitches.parquet` | 全投球データ（単一ファイル） |
+| `stats_*.csv` | カテゴリカル特徴量のラベル対応テーブル |
+| `train_at_bat_ids.csv` / `valid_at_bat_ids.csv` / `test_at_bat_ids.csv` | 時系列分割の `at_bat_id` リスト |
+| `batter_game_history.parquet` / `atbat_row_indices.parquet` | 打者履歴ルックアップテーブル |
+| `atbat_metadata.parquet` / `player_names.json` | ビューア用メタデータ |
 
 データ分割は **時系列分割**（`game_date` ベース）で行われます。学習データは 2024-06-30 以前、検証データは 2024-07-01〜2024-10-30、テストデータは 2025-03-15 以降です。ダブルヘッダーを正しく区別するため `game_pk`（試合ごとに一意な ID）を使用します。
 
-前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。打者履歴テーブルの構築は `scripts/add_game_info_and_rebuild.py`、打球方向角度（spray_angle）の算出は `scripts/add_spray_angle.py` で行います。
+### データセット構築
+
+`tools/build_dataset/` パッケージにモジュール化されたパイプラインで構築します。実行は `notes/00_build_dataset/build_dataset.ipynb` を開いて全セル実行するか、Python から直接呼び出します。
+
+```python
+from tools.build_dataset import run_pipeline
+run_pipeline()
+```
+
+| Step | 内容 |
+|------|------|
+| 1. Filter | 2000球以上の打者を抽出 |
+| 2. Features | カラム選択・ゲームステート・軌道特徴量・正規化 |
+| 3. Labels | description解析・カテゴリカルエンコード・stats生成 |
+| 4. Splits | 時系列分割・打者履歴構築・保存 |
+| 5. Quality | ソースデータの品質レポート |
+
+中間ファイルは生成せず、全処理をインメモリで実行します。各ステップの処理結果はノートブック上で視覚的に確認でき、実行後も見直せます。
 
 データセットクラスや読み込みユーティリティの詳細は [src/datasets/README.md](src/datasets/README.md) を参照してください。
 
@@ -342,33 +365,24 @@ python3 scripts/export_model_graph.py --arch atbat_dnn_mdn
 
 テスト結果をサンプル単位でインタラクティブに閲覧できる自己完結型 HTML ビューアを生成します。
 
-### 前準備: メタデータの構築
+### 前準備: 選手名メタデータの構築
 
-ビューアで試合情報（選手名・チーム・日付など）を表示するには、事前にメタデータを構築しておく必要があります。**初回のみ実行すれば OK です**（データセットが変わらない限り再実行不要）。
+ビューアで選手名を表示するには、事前に `player_names.json` を構築しておく必要があります。`atbat_metadata.parquet` はデータセット構築パイプライン（Step 4）で自動生成されます。**初回のみ実行すれば OK です**（データセットが変わらない限り再実行不要）。
 
 ```bash
 python3 tools/build_metadata.py
 ```
 
 処理内容:
-1. `data/` と `preprocess_01/` の Parquet を行位置ベースで結合し、打席ごとのメタデータ（打者/投手 MLBAM ID・チーム・打席番号）を抽出
+1. `atbat_metadata.parquet` から打者・投手の MLBAM ID を収集
 2. 元の Statcast CSV から投手名を収集
-3. MLB Stats API から打者名を一括取得
-4. `atbat_metadata.parquet` と `player_names.json` を出力
+3. MLB Stats API から不足分の選手名を一括取得
+4. `player_names.json` を出力
 
 | オプション | デフォルト | 説明 |
 |---|---|---|
-| `--data-dir` | `/workspace/datasets/statcast-customized/data` | 最終 data Parquet ディレクトリ |
-| `--preprocess-dir` | `/workspace/datasets/statcast-customized-tmp/preprocess_01` | preprocess_01 Parquet ディレクトリ |
-| `--output-dir` | `/workspace/datasets/statcast-customized/metadata` | メタデータ出力先 |
+| `--dataset-dir` | `/workspace/datasets/statcast-customized-v2` | データセットディレクトリ |
 | `--raw-csv-dir` | `/workspace/datasets/statcast` | 元の Statcast CSV ディレクトリ（省略可） |
-
-生成ファイル:
-
-| ファイル | 内容 |
-|---|---|
-| `atbat_metadata.parquet` | at_bat_id → 打者/投手 MLBAM ID, game_pk, チーム, 打席番号 |
-| `player_names.json` | MLBAM ID → 選手名 (`"Last, First"` 形式) |
 
 ### 使い方
 
@@ -439,7 +453,7 @@ python3 tools/generate_viewer.py \
 | `--sort` | `index` | ソート基準（`index` / `sa_error` / `reg_error`） |
 | `--output` | `pred-dir/viewer.html` | 出力 HTML ファイルパス |
 | `--seed` | `42` | `random` フィルタ時のシード |
-| `--metadata-dir` | `/workspace/datasets/statcast-customized/metadata` | メタデータディレクトリ（試合情報・選手名表示用） |
+| `--metadata-dir` | `/workspace/datasets/statcast-customized-v2` | メタデータディレクトリ（試合情報・選手名表示用） |
 | `--batter` | — | 特定の打者のみ表示（MLBAM ID または名前の一部） |
 
 ### データサイズの目安

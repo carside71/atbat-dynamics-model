@@ -4,14 +4,15 @@
 
 ## データソース
 
-`/workspace/datasets/statcast-customized/` に配置された Statcast データを使用します。
+`/workspace/datasets/statcast-customized-v2/` に配置されたデータセットを使用します。フラット構造で全ファイルが単一ディレクトリに格納されています。
 
-| ディレクトリ | 内容 |
+| ファイル | 内容 |
 |---|---|
-| `data/` | 年月別の Parquet ファイル（例: `statcast_2024_04.parquet`） |
-| `stats/` | カテゴリカル特徴量のラベル対応テーブル（CSV） |
-| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV）※時系列分割 |
-| `batter_history/` | 打者履歴ルックアップテーブル（Parquet） |
+| `pitches.parquet` | 全投球データ（単一ファイル） |
+| `stats_*.csv` | カテゴリカル特徴量のラベル対応テーブル |
+| `train_at_bat_ids.csv` / `valid_at_bat_ids.csv` / `test_at_bat_ids.csv` | 時系列分割の `at_bat_id` リスト |
+| `batter_game_history.parquet` / `atbat_row_indices.parquet` | 打者履歴ルックアップテーブル |
+| `atbat_metadata.parquet` / `player_names.json` | ビューア用メタデータ |
 
 データ分割は **時系列分割**（`game_date` ベース）で行われます。ダブルヘッダーを正しく区別するため `game_pk`（試合ごとに一意な ID）を使用します。
 
@@ -43,17 +44,15 @@
 
 ## 前処理パイプライン
 
-前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。中間データは `/workspace/datasets/statcast-customized-tmp/` に保存し、最終結果を `/workspace/datasets/statcast-customized/` にコピーして運用します。
+前処理は `tools/build_dataset/` パッケージにモジュール化されており、`notes/00_build_dataset/build_dataset.ipynb` で実行します。中間ファイルは生成せず、全処理をインメモリで実行して最終結果を直接出力します。
 
-| ステップ | ノートブック | 内容 |
+| Step | モジュール | 内容 |
 |---|---|---|
-| 01 | `00_prepare_dataset_01.ipynb` | 打席数 ≥ 2000 の打者を抽出 |
-| 02 | `01_prepare_dataset_02.ipynb` | 必要カラムの選択 |
-| 03 | `02_prepare_dataset_03.ipynb` | 特徴量エンジニアリング（カウント状態・走者アウト状態の統合等） |
-| 04 | `03_prepare_dataset_04.ipynb` | スイング関連カラムの整備 |
-| 05 | `04_prepare_dataset_05.ipynb` | 投球軌道特徴量（vx0〜az, sz_top, sz_bot）の追加 |
-| 06 | `06_consolidate_swing_result.ipynb` | swing_result を 9 クラスから 3 クラスに統合 |
-| 07 | `07_normalize_plate_z.ipynb` | plate_z をストライクゾーンで正規化し plate_z_norm を追加 |
+| 1. Filter | `step_filter.py` | 2000球以上の打者を抽出 |
+| 2. Features | `step_features.py` | カラム選択・ゲームステート・軌道特徴量・plate_z正規化・spray_angle |
+| 3. Labels | `step_labels.py` | description解析・swing_result統合(3クラス)・カテゴリカルエンコード・stats生成 |
+| 4. Splits | `step_splits.py` | 時系列分割・打者履歴構築・メタデータ構築・保存 |
+| 5. Quality | `step_validate.py` | ソースデータの品質レポート（構築処理の成否ではない） |
 
 ### plate_z ゾーン正規化
 
@@ -114,10 +113,10 @@ spray_angle（打球方向角度）はフェアゾーンとファウルゾーン
 
 | 関数 | 説明 |
 |---|---|
-| `load_stats(stats_dir)` | `stats/` ディレクトリからラベル対応テーブル（CSV）を読み込み |
+| `load_stats(stats_dir)` | `stats_*.csv` ファイルからラベル対応テーブルを読み込み |
 | `get_num_classes(stats)` | 各カテゴリカル特徴量のクラス数を取得 |
 | `compute_embedding_dim(num_classes)` | カテゴリ数から埋め込み次元を決定するヒューリスティック |
-| `load_all_parquet_files(data_dir)` | `data/` 配下の全 parquet を結合読み込み |
+| `load_all_parquet_files(data_dir)` | `pitches.parquet`（単一ファイル）を読み込み。存在しない場合は全 parquet を結合 |
 | `load_split_at_bat_ids(split_dir, split)` | train/valid/test の `at_bat_id` 集合を読み込み |
 | `compute_normalization_stats(df, columns)` | 指定カラムの平均・標準偏差を計算 |
 
@@ -139,8 +138,8 @@ spray_angle（打球方向角度）はフェアゾーンとファウルゾーン
 ├─────────────────────────────────────────────────┤
 │ 連続値特徴量 (float32, z-score 正規化)             │
 │   release_speed, release_spin_rate,             │
-│   pfx_x, pfx_z, plate_x, plate_z,              │
-│   vx0, vy0, vz0, ax, ay, az,                   │
+│   pfx_x, pfx_z, plate_x, plate_z,               │
+│   vx0, vy0, vz0, ax, ay, az,                    │
 │   sz_top, sz_bot, plate_z_norm                  │
 ├─────────────────────────────────────────────────┤
 │ 順序特徴量 (float32)                              │
@@ -232,7 +231,7 @@ ds = StatcastSequenceDataset(df, data_cfg, max_seq_len=10, norm_stats=norm_stats
 
 ### データソース
 
-`batter_history/` ディレクトリの以下のファイルを使用（`scripts/add_game_info_and_rebuild.py` で生成）:
+データセットディレクトリ内の以下のファイルを使用（`tools/build_dataset/step_splits.py` で生成）:
 
 | ファイル | 内容 |
 |---|---|

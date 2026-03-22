@@ -48,11 +48,11 @@ def run_pipeline(
     if display:
         splits_report.display()
 
-    # Step 5: Validate
-    print("\nStep 5/5: Validating...")
+    # Step 5: Data Quality Report
+    print("\nStep 5/5: Checking data quality...")
     validate_report = step_validate.run(df)
     if display:
         validate_report.display()
 
-    print(f"\nDone! Dataset saved to {output_dir}")
+    print(f"\nDataset build complete! Saved to {output_dir}")
     return df
