@@ -119,7 +119,7 @@ def _build_metadata(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
     metadata = df[meta_cols].groupby("at_bat_id").first().reset_index()
     metadata = metadata.sort_values("at_bat_id").reset_index(drop=True)
 
-    # 選手名は後から tools/build_metadata.py で MLB API から取得可能
+    # 選手名は後から tools/generate_viewer/metadata.py で MLB API から取得可能
     # ここでは空の辞書を返す
     player_names: dict[str, str] = {}
 

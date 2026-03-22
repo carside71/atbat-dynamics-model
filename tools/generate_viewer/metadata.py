@@ -4,7 +4,7 @@
 MLB Stats API から選手名を取得して player_names.json を生成する。
 
 Usage:
-    python tools/build_metadata.py \
+    python -m tools.generate_viewer.metadata \
         --dataset-dir /workspace/datasets/statcast-customized-v2 \
         --raw-csv-dir /workspace/datasets/statcast
 """

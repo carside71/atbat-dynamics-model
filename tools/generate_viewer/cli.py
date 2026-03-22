@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from viewer_builder import (
+from tools.generate_viewer.builder import (
     build_viewer_html,
     load_metadata,
     load_predictions,

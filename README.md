@@ -131,7 +131,6 @@ atbat-dynamics-model/
 │   ├── 01_analysis/             #   データ分析
 │   └── locals/                  #   ローカル実行用スクリプト
 ├── scripts/
-│   ├── export_model_graph.py    # モデルグラフ構造の画像出力
 │   ├── run_container_mac.sh     # Mac 用コンテナ起動
 │   └── run_container_wsl.sh     # WSL 用コンテナ起動
 ├── tools/
@@ -143,10 +142,13 @@ atbat-dynamics-model/
 │   │   ├── step_splits.py       #   Step 4: 分割・打者履歴・保存
 │   │   ├── step_validate.py     #   Step 5: データ品質レポート
 │   │   └── pipeline.py          #   パイプラインオーケストレータ
-│   ├── build_metadata.py        # ビューア用選手名メタデータ構築
-│   ├── generate_viewer.py       # 予測ビューア HTML 生成 CLI
-│   ├── viewer_builder.py        # データ変換・HTML 組み立て
-│   └── viewer_template.html     # ビューア HTML テンプレート
+│   ├── export_graph/            # モデルグラフ構造の画像出力
+│   │   └── cli.py               #   CLI エントリポイント
+│   └── generate_viewer/         # 予測ビューア HTML 生成
+│       ├── cli.py               #   CLI エントリポイント
+│       ├── builder.py           #   データ変換・HTML 組み立て
+│       ├── metadata.py          #   選手名メタデータ構築
+│       └── viewer_template.html #   ビューア HTML テンプレート
 ├── Dockerfile
 ├── pyproject.toml
 └── requirements.txt
@@ -334,13 +336,13 @@ run_pipeline()
 
 ```bash
 # 全モデルを一括出力
-python3 scripts/export_model_graph.py --all
+python3 -m tools.export_graph --all
 
 # YAML 設定ファイルから単一モデルを出力
-python3 scripts/export_model_graph.py --config configs/resdnn.yaml
+python3 -m tools.export_graph --config configs/resdnn.yaml
 
 # アーキテクチャ名を直接指定
-python3 scripts/export_model_graph.py --arch atbat_dnn_mdn
+python3 -m tools.export_graph --arch atbat_dnn_mdn
 ```
 
 ### オプション
@@ -375,7 +377,7 @@ python3 scripts/export_model_graph.py --arch atbat_dnn_mdn
 ビューアで選手名を表示するには、事前に `player_names.json` を構築しておく必要があります。`atbat_metadata.parquet` はデータセット構築パイプライン（Step 4）で自動生成されます。**初回のみ実行すれば OK です**（データセットが変わらない限り再実行不要）。
 
 ```bash
-python3 tools/build_metadata.py
+python3 -m tools.generate_viewer.metadata
 ```
 
 処理内容:
@@ -393,13 +395,13 @@ python3 tools/build_metadata.py
 
 ```bash
 # 1. メタデータ構築（初回のみ）
-python3 tools/build_metadata.py
+python3 -m tools.generate_viewer.metadata
 
 # 2. テスト実行時に予測データを保存
 python3 src/test.py --config configs/seq_resdnn_batter_hist.yaml --save-predictions
 
 # 3. ビューア HTML を生成
-python3 tools/generate_viewer.py \
+python3 -m tools.generate_viewer \
   --pred-dir outputs/.../test/2026-03-20-120000 \
   --max-samples 3000
 
@@ -413,12 +415,12 @@ python3 tools/generate_viewer.py \
 
 ```bash
 # MLBAM ID で指定
-python3 tools/generate_viewer.py \
+python3 -m tools.generate_viewer \
   --pred-dir outputs/.../test/2026-03-20-120000 \
   --batter 660271
 
 # 名前の一部で指定（部分一致検索）
-python3 tools/generate_viewer.py \
+python3 -m tools.generate_viewer \
   --pred-dir outputs/.../test/2026-03-20-120000 \
   --batter Ohtani
 ```
@@ -447,7 +449,7 @@ python3 tools/generate_viewer.py \
 | サンプル番号入力 | 直接ジャンプ |
 | フィルタドロップダウン | 全て / SA誤分類 / SR誤分類 / BT誤分類 / いずれか誤分類 |
 
-### generate_viewer.py のオプション
+### generate_viewer のオプション
 
 | オプション | デフォルト | 説明 |
 |---|---|---|

@@ -2,19 +2,19 @@
 
 使用例:
     # YAML 設定ファイルから単一モデルを出力
-    python scripts/export_model_graph.py --config configs/dnn.yaml
+    python -m tools.export_graph --config configs/dnn.yaml
 
     # アーキテクチャ名を直接指定
-    python scripts/export_model_graph.py --arch atbat_resdnn --format pdf
+    python -m tools.export_graph --arch atbat_resdnn --format pdf
 
     # 全登録モデルを一括出力
-    python scripts/export_model_graph.py --all --output-dir outputs/graphs
+    python -m tools.export_graph --all --output-dir outputs/graphs
 
     # torchviz バックエンドを使用
-    python scripts/export_model_graph.py --config configs/dnn.yaml --backend torchviz
+    python -m tools.export_graph --config configs/dnn.yaml --backend torchviz
 
     # モジュール展開深度を指定 (torchview)
-    python scripts/export_model_graph.py --arch atbat_seq_resdnn_batter_hist --depth 5
+    python -m tools.export_graph --arch atbat_seq_resdnn_batter_hist --depth 5
 """
 
 from __future__ import annotations
@@ -25,8 +25,9 @@ from pathlib import Path
 
 import torch
 
-# src ディレクトリをインポートパスに追加
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+# プロジェクトルートを基準に src をインポートパスに追加
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from config import DataConfig, ModelConfig, load_config
 from datasets import compute_embedding_dim
@@ -78,7 +79,7 @@ def _try_load_config(config_path: str) -> tuple[DataConfig, ModelConfig]:
     """YAML から設定を読み込む."""
     cfg_path = Path(config_path)
     if not cfg_path.is_absolute():
-        cfg_path = Path(__file__).resolve().parent.parent / cfg_path
+        cfg_path = _PROJECT_ROOT / cfg_path
     data_cfg, model_cfg, _ = load_config(cfg_path)
     return data_cfg, model_cfg
 
@@ -140,7 +141,7 @@ def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
-        output_dir = Path(__file__).resolve().parent.parent / output_dir
+        output_dir = _PROJECT_ROOT / output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Backend: {args.backend} | Format: {args.format} | Output: {output_dir}")
