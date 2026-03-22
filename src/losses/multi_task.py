@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from config import TrainConfig
 
 
-def mdn_loss(
+def _mdn_loss(
     mdn_out: dict[str, torch.Tensor],
     targets: torch.Tensor,
     mask: torch.Tensor,
@@ -69,44 +69,29 @@ def compute_loss(
         losses["swing_attempt"] = loss_sa.item()
         total = total + train_cfg.loss_weight_swing_attempt * loss_sa
 
-    # 2. swing_result (cross-entropy or focal loss, swing_attempt=True のサンプルのみ)
-    if "swing_result" in outputs:
-        sr_mask = batch["swing_result"] >= 0
-        if sr_mask.any():
-            sr_logits = outputs["swing_result"][sr_mask]
-            sr_targets = batch["swing_result"][sr_mask]
-            loss_sr = (
-                loss_fn_sr(sr_logits, sr_targets)
-                if loss_fn_sr is not None
-                else F.cross_entropy(sr_logits, sr_targets, label_smoothing=train_cfg.label_smoothing)
-            )
+    # 2-3. swing_result / bb_type（マスク付き分類損失）
+    def _masked_cls_loss(key: str, loss_fn: nn.Module | None, weight: float) -> None:
+        nonlocal total
+        if key not in outputs:
+            return
+        mask = batch[key] >= 0
+        if mask.any():
+            logits, targets = outputs[key][mask], batch[key][mask]
+            loss = loss_fn(logits, targets) if loss_fn else F.cross_entropy(logits, targets, label_smoothing=train_cfg.label_smoothing)
         else:
-            loss_sr = torch.tensor(0.0, device=device)
-        losses["swing_result"] = loss_sr.item()
-        total = total + train_cfg.loss_weight_swing_result * loss_sr
+            loss = torch.tensor(0.0, device=device)
+        losses[key] = loss.item()
+        total = total + weight * loss
 
-    # 3. bb_type (cross-entropy or focal loss, swing_result==1 のサンプルのみ)
-    if "bb_type" in outputs:
-        bt_mask = batch["bb_type"] >= 0
-        if bt_mask.any():
-            bt_logits = outputs["bb_type"][bt_mask]
-            bt_targets = batch["bb_type"][bt_mask]
-            loss_bt = (
-                loss_fn_bt(bt_logits, bt_targets)
-                if loss_fn_bt is not None
-                else F.cross_entropy(bt_logits, bt_targets, label_smoothing=train_cfg.label_smoothing)
-            )
-        else:
-            loss_bt = torch.tensor(0.0, device=device)
-        losses["bb_type"] = loss_bt.item()
-        total = total + train_cfg.loss_weight_bb_type * loss_bt
+    _masked_cls_loss("swing_result", loss_fn_sr, train_cfg.loss_weight_swing_result)
+    _masked_cls_loss("bb_type", loss_fn_bt, train_cfg.loss_weight_bb_type)
 
     # 4. regression
     if "regression" in outputs:
         reg_mask = batch["reg_mask"]  # (B, D)
         reg_out = outputs["regression"]
         if isinstance(reg_out, dict):
-            loss_reg = mdn_loss(reg_out, batch["reg_targets"], reg_mask)
+            loss_reg = _mdn_loss(reg_out, batch["reg_targets"], reg_mask)
         elif reg_mask.any():
             diff = (reg_out - batch["reg_targets"]) * reg_mask
             loss_reg = (diff**2).sum() / reg_mask.sum().clamp(min=1)
@@ -116,11 +101,15 @@ def compute_loss(
         total = total + train_cfg.loss_weight_regression * loss_reg
 
     # 5. physics consistency loss
-    if physics_loss_fn is not None and train_cfg.loss_weight_physics > 0:
-        if "bb_type" in outputs and "regression" in outputs:
-            loss_phys = physics_loss_fn(outputs, batch)
-            losses["physics"] = loss_phys.item()
-            total = total + train_cfg.loss_weight_physics * loss_phys
+    if (
+        physics_loss_fn is not None
+        and train_cfg.loss_weight_physics > 0
+        and "bb_type" in outputs
+        and "regression" in outputs
+    ):
+        loss_phys = physics_loss_fn(outputs, batch)
+        losses["physics"] = loss_phys.item()
+        total = total + train_cfg.loss_weight_physics * loss_phys
 
     losses["total"] = total.item()
 

@@ -77,7 +77,7 @@ $$
 
 ### bb_type クラスと物理的定義
 
-打球タイプは Statcast の打出角（launch_angle）基準で以下のように定義されます。`PhysicsConsistencyLoss` はこの対応関係を利用して分類予測と回帰予測の整合性を強制します。
+打球タイプは Statcast の打出角（launch_angle）基準で以下のように定義されます。`PhysicsLoss` はこの対応関係を利用して分類予測と回帰予測の整合性を強制します。
 
 | クラス | クラスインデックス | launch_angle 範囲（Statcast 基準） |
 |---|---|---|
@@ -88,7 +88,7 @@ $$
 
 ### spray_angle とフェアゾーン
 
-spray_angle（打球方向角度）はフェアゾーンとファウルゾーンの判別に使われます。`PhysicsConsistencyLoss` では以下の制約を適用します。
+spray_angle（打球方向角度）はフェアゾーンとファウルゾーンの判別に使われます。`PhysicsLoss` では以下の制約を適用します。
 
 | swing_result | spray_angle の期待範囲 |
 |---|---|

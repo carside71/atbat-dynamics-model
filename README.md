@@ -42,19 +42,6 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 
 階層的マスク付き損失を使い、スイングしなかった場合の swing_result や、インプレーにならなかった場合の bb_type / 回帰ターゲットは損失計算から除外されます。
 
-### 物理的整合性損失（Physics Consistency Loss）
-
-分類予測と回帰予測を独立に学習すると、「ゴロ（ground_ball）と予測しているのに打出角（launch_angle）がフライの値」といった物理的に矛盾した出力が発生し得ます。`PhysicsConsistencyLoss` はこの問題に対処する補助損失で、以下の物理制約をソフトペナルティとして課します。
-
-| 制約 | 分類ヘッド | 回帰ターゲット | 物理的定義（Statcast 基準） |
-|---|---|---|---|
-| 打球タイプ × 打出角 | bb_type | launch_angle | GB: < 10°, LD: 10°〜25°, FB: 25°〜50°, PU: > 50° |
-| スイング結果 × 打球方向 | swing_result | spray_angle | hit_into_play: フェア内 (±45°), foul: フェア外 |
-
-- 分類ロジットの **softmax 確率** で重み付けし、`torch.relu` ベースの微分可能ペナルティを計算するため、分類・回帰の両ヘッドに勾配が伝播します
-- MDN（Mixture Density Network）ヘッドにも対応: 混合分布の期待値 E[y] = Σ π_k * μ_k を使用
-- `loss_weight_physics: 0.0`（デフォルト）で無効、`0.001`〜`0.01` 程度で有効化を推奨
-
 ### モデルスコープ（model_scope）
 
 `model_scope` 設定により、予測タスクの範囲を切り替えて **分離学習** が可能です。
@@ -104,7 +91,7 @@ atbat-dynamics-model/
 │   ├── losses/                  # 損失関数
 │   │   ├── focal.py             #   Focal Loss
 │   │   ├── multi_task.py        #   マルチタスク損失 & MDN 損失
-│   │   └── physics.py           #   物理的整合性損失（PhysicsConsistencyLoss）
+│   │   └── physics.py           #   物理的整合性損失（PhysicsLoss）
 │   ├── models/                  # モデルアーキテクチャ（コンポーネントベース）
 │   │   ├── README.md
 │   │   ├── composable.py        #   ComposableModel（コンポーネント組み立て）
@@ -116,7 +103,6 @@ atbat-dynamics-model/
 │   │       ├── seq_encoders.py  #     GRUSeqEncoder, TransformerSeqEncoder
 │   │       └── batter_history.py #    HierarchicalGRUBatterHistoryEncoder
 │   └── utils/
-│       ├── graph_export.py      # モデルグラフ可視化
 │       ├── inference.py         # 推論ユーティリティ（model_forward 等）
 │       ├── logging.py           # ログ出力
 │       ├── model_io.py          # モデル構築・保存・復元
@@ -124,7 +110,7 @@ atbat-dynamics-model/
 ├── tests/
 │   ├── conftest.py              # テスト用共通 fixture
 │   ├── test_model_scope.py      # model_scope 関連テスト
-│   └── test_physics_loss.py     # PhysicsConsistencyLoss テスト
+│   └── test_physics_loss.py     # PhysicsLoss テスト
 ├── notes/                       # データ構築・分析ノートブック
 │   ├── 00_build_dataset/        #   前処理パイプライン
 │   │   └── build_dataset.ipynb  #     データセット構築ノートブック
@@ -143,7 +129,8 @@ atbat-dynamics-model/
 │   │   ├── step_validate.py     #   Step 5: データ品質レポート
 │   │   └── pipeline.py          #   パイプラインオーケストレータ
 │   ├── export_graph/            # モデルグラフ構造の画像出力
-│   │   └── cli.py               #   CLI エントリポイント
+│   │   ├── cli.py               #   CLI エントリポイント
+│   │   └── graph_export.py      #   グラフ描画・ダミー入力生成
 │   └── generate_viewer/         # 予測ビューア HTML 生成
 │       ├── cli.py               #   CLI エントリポイント
 │       ├── builder.py           #   データ変換・HTML 組み立て

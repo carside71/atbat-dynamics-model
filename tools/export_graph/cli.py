@@ -25,14 +25,14 @@ from pathlib import Path
 
 import torch
 
-# プロジェクトルートを基準に src をインポートパスに追加
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(_PROJECT_ROOT / "src"))
-
 from config import DataConfig, ModelConfig, load_config
 from datasets import compute_embedding_dim
 from models import create_model
-from utils.graph_export import create_dummy_inputs, export_graph
+from tools.export_graph.graph_export import create_dummy_inputs, export_graph
+
+# プロジェクトルートを基準に src をインポートパスに追加
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 # --- デフォルトのカーディナリティ（stats 不要時のフォールバック） ---
 _DEFAULT_CAT_CARDINALITY: dict[str, int] = {

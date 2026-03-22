@@ -24,7 +24,7 @@ from datasets import (
     load_split_at_bat_ids,
     load_stats,
 )
-from losses import FocalLoss, PhysicsConsistencyLoss, compute_loss
+from losses import FocalLoss, PhysicsLoss, compute_loss
 from utils.inference import model_forward, move_batch_to_device
 from utils.logging import tee_logging
 from utils.model_io import build_model, save_model_config
@@ -182,8 +182,6 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     use_seq = model_cfg.max_seq_len > 0
     use_batter_hist = model_cfg.batter_hist_max_atbats > 0
     need_at_bat_id = use_seq or use_batter_hist
-    # # game_pk, batter は batter_hist Dataset で必要
-    # extra_cols_to_keep = ["game_pk"] if use_batter_hist else []
 
     if need_at_bat_id:
         train_df = all_df[all_df["at_bat_id"].isin(train_ids)].reset_index(drop=True)
@@ -221,7 +219,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     # === Physics Consistency Loss（正規化パラメータが必要なためここで構築）===
     physics_loss_fn = None
     if train_cfg.loss_weight_physics > 0:
-        physics_loss_fn = PhysicsConsistencyLoss(
+        physics_loss_fn = PhysicsLoss(
             reg_norm_stats=reg_norm_stats,
             target_reg_columns=data_cfg.target_reg,
             margin=train_cfg.physics_margin_degrees,

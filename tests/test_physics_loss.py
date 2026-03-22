@@ -1,11 +1,11 @@
-"""PhysicsConsistencyLoss のテスト."""
+"""PhysicsLoss のテスト."""
 
 import pytest
 import torch
 
 from config import TrainConfig
 from losses.multi_task import compute_loss
-from losses.physics import PhysicsConsistencyLoss
+from losses.physics import PhysicsLoss
 
 
 # テスト用の正規化パラメータ（launch_angle: mean=20, std=15, spray_angle: mean=0, std=30）
@@ -20,7 +20,7 @@ _TARGET_REG_COLUMNS = ["launch_speed", "launch_angle", "hit_distance_sc", "spray
 
 @pytest.fixture()
 def physics_loss_fn():
-    return PhysicsConsistencyLoss(_REG_NORM_STATS, _TARGET_REG_COLUMNS, margin=2.0)
+    return PhysicsLoss(_REG_NORM_STATS, _TARGET_REG_COLUMNS, margin=2.0)
 
 
 def _make_batch(B, bb_type_vals, sr_vals=None, reg_la_raw=None, reg_sa_raw=None):
@@ -79,7 +79,7 @@ def _make_outputs(B, bb_logits, reg_la_raw, sr_logits=None, reg_sa_raw=None):
     return out
 
 
-class TestPhysicsConsistencyLoss:
+class TestPhysicsLoss:
     def test_normalized_thresholds(self, physics_loss_fn):
         """正規化閾値が正しく計算されていることを確認."""
         la_mean, la_std = 20.0, 15.0
@@ -216,7 +216,7 @@ class TestComputeLossWithPhysics:
     def test_physics_key_in_losses(self, fake_batch):
         """physics_loss_fn を渡すと losses に 'physics' キーが含まれる."""
         train_cfg = TrainConfig(loss_weight_physics=0.01)
-        physics_fn = PhysicsConsistencyLoss(_REG_NORM_STATS, _TARGET_REG_COLUMNS)
+        physics_fn = PhysicsLoss(_REG_NORM_STATS, _TARGET_REG_COLUMNS)
 
         B = fake_batch["swing_attempt"].shape[0]
         outputs = {
@@ -246,7 +246,7 @@ class TestComputeLossWithPhysics:
     def test_no_physics_when_weight_zero(self, fake_batch):
         """loss_weight_physics=0.0 → 'physics' キーなし."""
         train_cfg = TrainConfig(loss_weight_physics=0.0)
-        physics_fn = PhysicsConsistencyLoss(_REG_NORM_STATS, _TARGET_REG_COLUMNS)
+        physics_fn = PhysicsLoss(_REG_NORM_STATS, _TARGET_REG_COLUMNS)
 
         B = fake_batch["swing_attempt"].shape[0]
         outputs = {
