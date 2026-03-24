@@ -97,7 +97,7 @@ def plot_individual_loss(history: list[dict], save_path: Path, figsize: tuple[fl
     n = len(components)
     cols = min(n, 3)
     rows = (n + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(figsize[0], figsize[1] * rows / 2), squeeze=False)
+    fig, axes = plt.subplots(rows, cols, figsize=(figsize[0] * cols, figsize[1] * rows), squeeze=False)
 
     for idx, (comp, train, val) in enumerate(components):
         ax = axes[idx // cols][idx % cols]
@@ -115,7 +115,6 @@ def plot_individual_loss(history: list[dict], save_path: Path, figsize: tuple[fl
     for idx in range(n, rows * cols):
         axes[idx // cols][idx % cols].set_visible(False)
 
-    fig.suptitle("Individual Losses", fontsize=plt.rcParams["font.size"] + 2)
     fig.tight_layout()
     fig.savefig(save_path, dpi=dpi)
     plt.close(fig)
@@ -194,7 +193,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=f"生成するプロットの種類 (default: 全種類). 選択肢: {', '.join(ALL_PLOT_TYPES)}",
     )
-    parser.add_argument("--figsize", nargs=2, type=float, default=[12, 8], metavar=("W", "H"), help="画像サイズ (default: 12 8)")
+    parser.add_argument(
+        "--figsize", nargs=2, type=float, default=[6, 4], metavar=("W", "H"), help="画像サイズ (default: 6 4)"
+    )
     parser.add_argument("--fontsize", type=int, default=12, help="フォントサイズ (default: 12)")
     parser.add_argument("--format", choices=["png", "pdf", "svg"], default="png", help="出力形式 (default: png)")
     parser.add_argument("--dpi", type=int, default=150, help="解像度 (default: 150)")
