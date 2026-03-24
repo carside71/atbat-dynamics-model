@@ -28,11 +28,11 @@ data:
     - sz_top
     - sz_bot
     - plate_z_norm
-  ordinal_features:
-    # - inning_clipped
-    # - is_inning_top
-    # - diff_score_clipped
-    # - pitch_number_clipped
+  # ordinal_features:
+  #   - inning_clipped
+  #   - is_inning_top
+  #   - diff_score_clipped
+  #   - pitch_number_clipped
 
   target_cls_swing_attempt: swing_attempt
   target_cls_swing_result: swing_result
