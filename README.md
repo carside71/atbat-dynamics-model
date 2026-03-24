@@ -102,8 +102,8 @@ atbat-dynamics-model/
 │   │       ├── backbones.py     #     DNNBackbone, ResDNNBackbone
 │   │       ├── heads.py         #     build_mlp_head(), MDNHead
 │   │       ├── head_strategies.py #   IndependentHeadStrategy, CascadeHeadStrategy
-│   │       ├── seq_encoders.py  #     GRUSeqEncoder, TransformerSeqEncoder
-│   │       └── batter_history.py #    HierarchicalGRUBatterHistoryEncoder
+│   │       ├── pitch_seq_encoders.py  # GRUPitchSeqEncoder, TransformerPitchSeqEncoder
+│   │       └── batter_hist_encoders.py # GRUBatterHistEncoder, TransformerBatterHistEncoder
 │   └── utils/
 │       ├── inference.py         # 推論ユーティリティ（model_forward 等）
 │       ├── logging.py           # ログ出力

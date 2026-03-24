@@ -1,5 +1,5 @@
-# AtBat Dynamics Model 設定ファイル (ResBlock + GELU + Cascade Heads)
-# ヘッド間の情報伝達を有効化した改良版
+# AtBat Dynamics Model 設定ファイル (Sequence + ResBlock + GELU + Batter History Encoder)
+# 過去投球系列を GRU でエンコードし、さらに直近50打席の打撃履歴もエンコードして予測
 
 data:
   dataset_dir: /workspace/datasets/statcast-customized-v2
@@ -8,7 +8,7 @@ data:
   categorical_features:
     - p_throws
     - pitch_type
-    - batter
+    # - batter
     - stand
     - base_out_state
     - count_state
@@ -50,13 +50,25 @@ model:
   dropout: 0.2
   head_strategy: cascade
   detach_cascade: true  # false にすると下流勾配が上流ヘッドにも伝搬
+  regression_head_type: mdn
+  mdn_num_components: 5
+  pitch_seq_max_len: 10
+  pitch_seq_encoder_type: gru
+  pitch_seq_hidden_dim: 64
+  pitch_seq_num_layers: 1
+  pitch_seq_bidirectional: false
+  batter_hist_max_atbats: 50
+  batter_hist_max_pitches: 10
+  batter_hist_encoder_type: gru
+  batter_hist_hidden_dim: 64
+  batter_hist_num_layers: 1
 
 train:
-  batch_size: 4096
-  num_epochs: 30
+  batch_size: 2048
+  num_epochs: 20
   lr: 1.0e-3
   weight_decay: 1.0e-5
-  num_workers: 4
+  num_workers: 8
   device: cuda
 
   loss_weight_swing_attempt: 1.0

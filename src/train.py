@@ -57,11 +57,12 @@ def _build_loss_functions(
 def _format_loss_parts(metrics: dict[str, float], scope: str) -> str:
     """スコープに応じた損失文字列を構築する."""
     parts = []
-    if scope in ("all", "swing_attempt"):
+    if scope in ("all", "swing_attempt", "classification"):
         parts.append(f"SA={metrics.get('swing_attempt', 0.0):.4f}")
-    if scope in ("all", "outcome"):
+    if scope in ("all", "outcome", "classification"):
         parts.append(f"SR={metrics.get('swing_result', 0.0):.4f}")
         parts.append(f"BT={metrics.get('bb_type', 0.0):.4f}")
+    if scope in ("all", "outcome", "regression"):
         parts.append(f"Reg={metrics.get('regression', 0.0):.4f}")
     if "physics" in metrics:
         parts.append(f"Phys={metrics['physics']:.4f}")
@@ -124,9 +125,9 @@ def evaluate(
                 bt_total += bt_mask.sum().item()
 
     avg_losses = {k: v / max(n_batches, 1) for k, v in total_losses.items()}
-    if model_scope in ("all", "swing_attempt"):
+    if model_scope in ("all", "swing_attempt", "classification"):
         avg_losses["acc_swing_attempt"] = sa_correct / max(sa_total, 1)
-    if model_scope in ("all", "outcome"):
+    if model_scope in ("all", "outcome", "classification"):
         avg_losses["acc_swing_result"] = sr_correct / max(sr_total, 1)
         avg_losses["acc_bb_type"] = bt_correct / max(bt_total, 1)
 
@@ -179,7 +180,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     train_ids = load_split_at_bat_ids(data_cfg.split_dir, "train")
     val_ids = load_split_at_bat_ids(data_cfg.split_dir, "val")
 
-    use_seq = model_cfg.max_seq_len > 0
+    use_seq = model_cfg.pitch_seq_max_len > 0
     use_batter_hist = model_cfg.batter_hist_max_atbats > 0
     need_at_bat_id = use_seq or use_batter_hist
 
@@ -199,7 +200,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     print(f"  Val samples: {len(val_df):,}")
 
     # === outcome スコープ: swing_attempt=1 のサンプルのみに絞り込み ===
-    if model_scope == "outcome":
+    if model_scope in ("outcome", "regression"):
         train_df = train_df[train_df["swing_attempt"] == 1].reset_index(drop=True)
         val_df = val_df[val_df["swing_attempt"] == 1].reset_index(drop=True)
         print("  Filtered to swing_attempt=1:")
@@ -229,7 +230,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     # === Dataset & DataLoader ===
     print("Building datasets...")
     ds_kwargs = dict(
-        max_seq_len=model_cfg.max_seq_len,
+        max_seq_len=model_cfg.pitch_seq_max_len,
         batter_hist_max_atbats=model_cfg.batter_hist_max_atbats,
         batter_hist_max_pitches=model_cfg.batter_hist_max_pitches,
     )
@@ -315,11 +316,12 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
             n_batches += 1
 
             postfix = {"total": f"{losses['total']:.4f}"}
-            if model_scope in ("all", "swing_attempt"):
+            if model_scope in ("all", "swing_attempt", "classification"):
                 postfix["SA"] = f"{losses.get('swing_attempt', 0.0):.4f}"
-            if model_scope in ("all", "outcome"):
+            if model_scope in ("all", "outcome", "classification"):
                 postfix["SR"] = f"{losses.get('swing_result', 0.0):.4f}"
                 postfix["BT"] = f"{losses.get('bb_type', 0.0):.4f}"
+            if model_scope in ("all", "outcome", "regression"):
                 postfix["Reg"] = f"{losses.get('regression', 0.0):.4f}"
             pbar.set_postfix(postfix)
 

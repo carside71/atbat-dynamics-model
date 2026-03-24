@@ -6,11 +6,11 @@ import torch.nn as nn
 from config import ModelConfig
 from utils.registry import make_registry
 
-SEQ_ENCODER_REGISTRY, register_seq_encoder = make_registry()
+PITCH_SEQ_ENCODER_REGISTRY, register_pitch_seq_encoder = make_registry()
 
 
-class BaseSeqEncoder(nn.Module):
-    """シーケンスエンコーダの基底クラス."""
+class BasePitchSeqEncoder(nn.Module):
+    """投球シーケンスエンコーダの基底クラス."""
 
     def __init__(self, cfg: ModelConfig, num_cont: int):
         super().__init__()
@@ -43,21 +43,21 @@ class BaseSeqEncoder(nn.Module):
         return torch.cat([pt_emb, seq_cont, seq_swing_attempt.unsqueeze(-1), sr_emb], dim=-1)
 
 
-@register_seq_encoder("gru")
-class GRUSeqEncoder(BaseSeqEncoder):
+@register_pitch_seq_encoder("gru")
+class GRUPitchSeqEncoder(BasePitchSeqEncoder):
     """GRU ベースの投球系列エンコーダ."""
 
     def __init__(self, cfg: ModelConfig, num_cont: int):
         super().__init__(cfg, num_cont)
         self.encoder = nn.GRU(
             input_size=self.seq_input_dim,
-            hidden_size=cfg.seq_hidden_dim,
-            num_layers=cfg.seq_num_layers,
+            hidden_size=cfg.pitch_seq_hidden_dim,
+            num_layers=cfg.pitch_seq_num_layers,
             batch_first=True,
-            bidirectional=cfg.seq_bidirectional,
-            dropout=cfg.dropout if cfg.seq_num_layers > 1 else 0.0,
+            bidirectional=cfg.pitch_seq_bidirectional,
+            dropout=cfg.dropout if cfg.pitch_seq_num_layers > 1 else 0.0,
         )
-        self._output_dim = cfg.seq_hidden_dim * (2 if cfg.seq_bidirectional else 1)
+        self._output_dim = cfg.pitch_seq_hidden_dim * (2 if cfg.pitch_seq_bidirectional else 1)
 
     @property
     def output_dim(self) -> int:
@@ -86,33 +86,29 @@ class GRUSeqEncoder(BaseSeqEncoder):
         )
         _, h_n = self.encoder(packed)
 
-        # if self.cfg.seq_bidirectional:
-        #     h_n = torch.cat([h_n[-2], h_n[-1]], dim=-1)
-        # else:
-        #     h_n = h_n[-1]
-        h_n = torch.cat([h_n[-2], h_n[-1]], dim=-1) if self.cfg.seq_bidirectional else h_n[-1]
+        h_n = torch.cat([h_n[-2], h_n[-1]], dim=-1) if self.cfg.pitch_seq_bidirectional else h_n[-1]
 
         seq_out[has_seq] = h_n
         return seq_out
 
 
-@register_seq_encoder("transformer")
-class TransformerSeqEncoder(BaseSeqEncoder):
+@register_pitch_seq_encoder("transformer")
+class TransformerPitchSeqEncoder(BasePitchSeqEncoder):
     """Transformer ベースの投球系列エンコーダ."""
 
     def __init__(self, cfg: ModelConfig, num_cont: int):
         super().__init__(cfg, num_cont)
-        self.input_proj = nn.Linear(self.seq_input_dim, cfg.seq_hidden_dim)
-        nhead = max(1, cfg.seq_hidden_dim // 16)
+        self.input_proj = nn.Linear(self.seq_input_dim, cfg.pitch_seq_hidden_dim)
+        nhead = max(1, cfg.pitch_seq_hidden_dim // 16)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=cfg.seq_hidden_dim,
+            d_model=cfg.pitch_seq_hidden_dim,
             nhead=nhead,
-            dim_feedforward=cfg.seq_hidden_dim * 4,
+            dim_feedforward=cfg.pitch_seq_hidden_dim * 4,
             dropout=cfg.dropout,
             batch_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.seq_num_layers)
-        self._output_dim = cfg.seq_hidden_dim
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.pitch_seq_num_layers)
+        self._output_dim = cfg.pitch_seq_hidden_dim
 
     @property
     def output_dim(self) -> int:

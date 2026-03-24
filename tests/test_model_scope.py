@@ -24,7 +24,7 @@ from models.components.head_strategies import (
 
 class TestValidateModelScope:
     def test_valid_scopes(self):
-        for scope in ("all", "swing_attempt", "outcome"):
+        for scope in ("all", "swing_attempt", "outcome", "classification", "regression"):
             validate_model_scope(scope)  # should not raise
 
     def test_invalid_scope(self):
@@ -86,6 +86,30 @@ class TestIndependentHeadStrategy:
         assert out["swing_result"].shape == (4, 3)
         assert not hasattr(strategy, "head_swing_attempt")
 
+    def test_scope_classification(self):
+        cfg = self._make_cfg("classification")
+        strategy = IndependentHeadStrategy(cfg, self.BACKBONE_OUT)
+        h = torch.randn(4, self.BACKBONE_OUT)
+        out = strategy(h)
+
+        assert set(out.keys()) == {"swing_attempt", "swing_result", "bb_type"}
+        assert out["swing_attempt"].shape == (4,)
+        assert out["swing_result"].shape == (4, 3)
+        assert out["bb_type"].shape == (4, 4)
+        assert not hasattr(strategy, "head_regression")
+
+    def test_scope_regression(self):
+        cfg = self._make_cfg("regression")
+        strategy = IndependentHeadStrategy(cfg, self.BACKBONE_OUT)
+        h = torch.randn(4, self.BACKBONE_OUT)
+        out = strategy(h)
+
+        assert set(out.keys()) == {"regression"}
+        assert out["regression"].shape == (4, 5)
+        assert not hasattr(strategy, "head_swing_attempt")
+        assert not hasattr(strategy, "head_swing_result")
+        assert not hasattr(strategy, "head_bb_type")
+
 
 # ---------------------------------------------------------------------------
 # CascadeHeadStrategy
@@ -139,6 +163,30 @@ class TestCascadeHeadStrategy:
         assert out["swing_result"].shape == (4, 3)
         assert out["bb_type"].shape == (4, 4)
         assert out["regression"].shape == (4, 5)
+
+    def test_scope_classification(self):
+        cfg = self._make_cfg("classification")
+        strategy = CascadeHeadStrategy(cfg, self.BACKBONE_OUT)
+        h = torch.randn(4, self.BACKBONE_OUT)
+        out = strategy(h)
+
+        assert set(out.keys()) == {"swing_attempt", "swing_result", "bb_type"}
+        assert out["swing_attempt"].shape == (4,)
+        assert out["swing_result"].shape == (4, 3)
+        assert out["bb_type"].shape == (4, 4)
+        assert not hasattr(strategy, "head_regression")
+
+    def test_scope_regression(self):
+        cfg = self._make_cfg("regression")
+        strategy = CascadeHeadStrategy(cfg, self.BACKBONE_OUT)
+        h = torch.randn(4, self.BACKBONE_OUT)
+        out = strategy(h)
+
+        assert set(out.keys()) == {"regression"}
+        assert out["regression"].shape == (4, 5)
+        assert not hasattr(strategy, "head_swing_attempt")
+        assert not hasattr(strategy, "head_swing_result")
+        assert not hasattr(strategy, "head_bb_type")
 
 
 # ---------------------------------------------------------------------------
@@ -202,12 +250,50 @@ class TestComposableModel:
         assert out["bb_type"].shape == (4, 4)
         assert out["regression"].shape == (4, 5)
 
+    def test_scope_classification(self):
+        cfg = self._make_cfg("classification")
+        model = ComposableModel(cfg, self.NUM_CONT, self.NUM_ORD)
+        out = model(*self._make_inputs())
+
+        assert set(out.keys()) == {"swing_attempt", "swing_result", "bb_type"}
+        assert out["swing_attempt"].shape == (4,)
+        assert out["swing_result"].shape == (4, 3)
+        assert out["bb_type"].shape == (4, 4)
+
+    def test_scope_regression(self):
+        cfg = self._make_cfg("regression")
+        model = ComposableModel(cfg, self.NUM_CONT, self.NUM_ORD)
+        out = model(*self._make_inputs())
+
+        assert set(out.keys()) == {"regression"}
+        assert out["regression"].shape == (4, 5)
+
     def test_scope_all_backward(self):
         """全スコープで勾配が流れることを確認."""
         cfg = self._make_cfg("all")
         model = ComposableModel(cfg, self.NUM_CONT, self.NUM_ORD)
         out = model(*self._make_inputs())
         loss = out["swing_attempt"].sum() + out["swing_result"].sum() + out["bb_type"].sum() + out["regression"].sum()
+        loss.backward()
+        for p in model.parameters():
+            assert p.grad is not None
+
+    def test_scope_classification_backward(self):
+        """classification スコープで勾配が流れることを確認."""
+        cfg = self._make_cfg("classification")
+        model = ComposableModel(cfg, self.NUM_CONT, self.NUM_ORD)
+        out = model(*self._make_inputs())
+        loss = out["swing_attempt"].sum() + out["swing_result"].sum() + out["bb_type"].sum()
+        loss.backward()
+        for p in model.parameters():
+            assert p.grad is not None
+
+    def test_scope_regression_backward(self):
+        """regression スコープで勾配が流れることを確認."""
+        cfg = self._make_cfg("regression")
+        model = ComposableModel(cfg, self.NUM_CONT, self.NUM_ORD)
+        out = model(*self._make_inputs())
+        loss = out["regression"].sum()
         loss.backward()
         for p in model.parameters():
             assert p.grad is not None
@@ -263,6 +349,34 @@ class TestComputeLoss:
         assert "swing_result" in losses
         assert "bb_type" in losses
         assert "regression" in losses
+
+    def test_classification_only(self, train_cfg, fake_batch):
+        """classification の outputs（SA/SR/BT）で正常動作."""
+        B = fake_batch["swing_attempt"].shape[0]
+        outputs = {
+            "swing_attempt": torch.randn(B, requires_grad=True),
+            "swing_result": torch.randn(B, 3, requires_grad=True),
+            "bb_type": torch.randn(B, 4, requires_grad=True),
+        }
+        total, losses = compute_loss(outputs, fake_batch, train_cfg)
+
+        assert "swing_attempt" in losses
+        assert "swing_result" in losses
+        assert "bb_type" in losses
+        assert "regression" not in losses
+        assert total.requires_grad
+
+    def test_regression_only(self, train_cfg, fake_batch):
+        """regression のみの outputs で正常動作."""
+        B = fake_batch["swing_attempt"].shape[0]
+        outputs = {"regression": torch.randn(B, 5, requires_grad=True)}
+        total, losses = compute_loss(outputs, fake_batch, train_cfg)
+
+        assert "swing_attempt" not in losses
+        assert "swing_result" not in losses
+        assert "bb_type" not in losses
+        assert "regression" in losses
+        assert total.requires_grad
 
     def test_all_keys_total_is_weighted_sum(self, train_cfg, fake_batch):
         """total が各損失の重み付き和になっていることを確認."""
@@ -368,13 +482,14 @@ class TestModelConfigPersistence:
             "mdn_num_components": 5,
             "num_cont": 2,
             "num_ord": 1,
-            "max_seq_len": 0,
-            "seq_encoder_type": "gru",
-            "seq_hidden_dim": 64,
-            "seq_num_layers": 1,
-            "seq_bidirectional": False,
+            "pitch_seq_max_len": 0,
+            "pitch_seq_encoder_type": "gru",
+            "pitch_seq_hidden_dim": 64,
+            "pitch_seq_num_layers": 1,
+            "pitch_seq_bidirectional": False,
             "batter_hist_max_atbats": 0,
             "batter_hist_max_pitches": 10,
+            "batter_hist_encoder_type": "gru",
             "batter_hist_hidden_dim": 64,
             "batter_hist_num_layers": 1,
             "num_reg_targets": 5,

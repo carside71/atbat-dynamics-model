@@ -82,7 +82,7 @@ class DataConfig:
     )
 
 
-_VALID_MODEL_SCOPES = {"all", "swing_attempt", "outcome"}
+_VALID_MODEL_SCOPES = {"all", "swing_attempt", "outcome", "classification", "regression"}
 
 
 def validate_model_scope(scope: str) -> None:
@@ -93,7 +93,8 @@ def validate_model_scope(scope: str) -> None:
 
 @dataclass
 class ModelConfig:
-    # モデルスコープ: "all"=全タスク統合, "swing_attempt"=SA予測のみ, "outcome"=SR/BT/Reg予測のみ
+    # モデルスコープ: "all"=全タスク統合, "swing_attempt"=SA予測のみ, "outcome"=SR/BT/Reg予測のみ,
+    # "classification"=SA/SR/BT分類のみ, "regression"=回帰のみ
     model_scope: str = "all"
 
     # カテゴリカル特徴量の埋め込み次元（実行時に stats から自動設定）
@@ -119,16 +120,17 @@ class ModelConfig:
     num_swing_result: int = 3
     num_bb_type: int = 4
 
-    # シーケンスエンコーダ（0 で無効）
-    max_seq_len: int = 0
-    seq_encoder_type: str = "gru"  # "gru" | "transformer"
-    seq_hidden_dim: int = 64
-    seq_num_layers: int = 1
-    seq_bidirectional: bool = False
+    # 投球シーケンスエンコーダ（0 で無効）
+    pitch_seq_max_len: int = 0
+    pitch_seq_encoder_type: str = "gru"  # "gru" | "transformer"
+    pitch_seq_hidden_dim: int = 64
+    pitch_seq_num_layers: int = 1
+    pitch_seq_bidirectional: bool = False
 
     # 打者履歴エンコーダ（0 で無効）
     batter_hist_max_atbats: int = 0
     batter_hist_max_pitches: int = 10
+    batter_hist_encoder_type: str = "gru"  # "gru" | "transformer"
     batter_hist_hidden_dim: int = 64
     batter_hist_num_layers: int = 1
 

@@ -334,8 +334,8 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     with open(model_config_path) as f:
         saved_model_cfg = json.load(f)
     model_scope = saved_model_cfg.get("model_scope", "all")
-    use_seq = saved_model_cfg.get("max_seq_len", 0) > 0
-    max_seq_len = saved_model_cfg.get("max_seq_len", 0)
+    max_seq_len = saved_model_cfg.get("pitch_seq_max_len", saved_model_cfg.get("max_seq_len", 0))
+    use_seq = max_seq_len > 0
     use_batter_hist = saved_model_cfg.get("batter_hist_max_atbats", 0) > 0
     batter_hist_max_atbats = saved_model_cfg.get("batter_hist_max_atbats", 0)
     batter_hist_max_pitches = saved_model_cfg.get("batter_hist_max_pitches", 10)
@@ -356,7 +356,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     print(f"  Samples: {len(test_df):,}")
 
     # === outcome スコープ: swing_attempt=1 のサンプルのみに絞り込み ===
-    if model_scope == "outcome":
+    if model_scope in ("outcome", "regression"):
         test_df = test_df[test_df["swing_attempt"] == 1].reset_index(drop=True)
         print(f"  Filtered to swing_attempt=1: {len(test_df):,} samples")
 

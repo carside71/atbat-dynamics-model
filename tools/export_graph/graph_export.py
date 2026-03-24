@@ -33,8 +33,8 @@ def create_dummy_inputs(
 
     # 系列モデル用のダミー入力
     is_seq = getattr(model, "is_seq_model", False)
-    if is_seq and model_cfg.max_seq_len > 0:
-        T = model_cfg.max_seq_len
+    if is_seq and model_cfg.pitch_seq_max_len > 0:
+        T = model_cfg.pitch_seq_max_len
         kwargs["seq_pitch_type"] = torch.zeros(batch_size, T, dtype=torch.long, device=device)
         kwargs["seq_cont"] = torch.zeros(batch_size, T, num_cont, device=device)
         kwargs["seq_swing_attempt"] = torch.zeros(batch_size, T, device=device)

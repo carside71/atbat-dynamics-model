@@ -1,14 +1,14 @@
-# AtBat Dynamics Model 設定ファイル (swing_attempt 専用モデル)
-# swing_attempt のみを予測する単一タスクモデル
+# AtBat Dynamics Model 設定ファイル
+# 各セクション内のフィールドは省略可能（デフォルト値が使われます）
 
 data:
   dataset_dir: /workspace/datasets/statcast-customized-v2
-  output_dir: /workspace/outputs
+  output_dir: /workspace/outputs/regression
 
   categorical_features:
     - p_throws
     - pitch_type
-    - batter
+    # - batter
     - stand
     - base_out_state
     - count_state
@@ -44,19 +44,20 @@ data:
     - spray_angle
 
 model:
-  model_scope: swing_attempt
-  backbone_type: resdnn
-  backbone_hidden: [512, 512, 256, 256, 128]
+  model_scope: regression
+  backbone_type: dnn
+  backbone_hidden: [512, 256, 128]
   head_hidden: [64]
+  head_activation: relu
   dropout: 0.2
 
 train:
   batch_size: 4096
-  num_epochs: 30
+  num_epochs: 20
   lr: 1.0e-3
   weight_decay: 1.0e-5
   num_workers: 4
   device: cuda
+  seed: 42
 
-  loss_weight_swing_attempt: 1.0
-  label_smoothing: 0.0
+  loss_weight_regression: 1.0
