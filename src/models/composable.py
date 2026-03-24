@@ -32,14 +32,12 @@ class ComposableModel(nn.Module):
         # 3. 打者履歴エンコーダ（オプション）
         self.hist_encoder = None
         if cfg.batter_hist_max_atbats > 0:
-            if self.seq_encoder is None:
-                raise ValueError("batter_hist_max_atbats > 0 requires pitch_seq_max_len > 0 (pitch_seq_encoder)")
             hist_cls = BATTER_HIST_ENCODER_REGISTRY[cfg.batter_hist_encoder_type]
             self.hist_encoder = hist_cls(
                 cfg,
                 num_cont,
-                seq_pitch_type_embed=self.seq_encoder.seq_pitch_type_embed,
-                seq_swing_result_embed=self.seq_encoder.seq_swing_result_embed,
+                seq_pitch_type_embed=self.seq_encoder.seq_pitch_type_embed if self.seq_encoder else None,
+                seq_swing_result_embed=self.seq_encoder.seq_swing_result_embed if self.seq_encoder else None,
             )
             feat_dim += self.hist_encoder.output_dim
 

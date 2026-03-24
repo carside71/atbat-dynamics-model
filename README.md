@@ -53,26 +53,21 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 | `all`（デフォルト） | 全4タスク | 全サンプル | 統合モデル（従来動作） |
 | `swing_attempt` | swing_attempt のみ | 全サンプル | スイング判定の専用モデル |
 | `outcome` | swing_result + bb_type + regression | swing_attempt=1 のみ | スイング後の結果予測専用モデル |
+| `classification` | swing_attempt + swing_result + bb_type | 全サンプル | 3分類タスクのみ（回帰なし） |
+| `regression` | regression のみ | swing_attempt=1 のみ | 回帰予測専用モデル |
 
-`swing_attempt` モデルと `outcome` モデルを別々に学習することで、各タスクに最適化された専用モデルを構築できます。
+タスクごとに分離学習することで、各タスクに最適化された専用モデルを構築できます。
 
 ## プロジェクト構成
 
 ```
 atbat-dynamics-model/
-├── configs/                     # YAML 設定ファイル
-│   ├── dnn.yaml
-│   ├── dnn_change_loss_w.yaml
-│   ├── dnn_mdn.yaml
-│   ├── resdnn.yaml
-│   ├── resdnn_swing_attempt.yaml
-│   ├── resdnn_outcome.yaml
-│   ├── resdnn_cascade.yaml
-│   ├── resdnn_cascade_physics.yaml
-│   ├── resdnn_focal.yaml
-│   ├── seq_resdnn.yaml
-│   ├── seq_resdnn_batter_hist.yaml
-│   └── seq_resdnn_mdn_cascade_batter_hist.yaml
+├── configs/                     # YAML 設定ファイル（model_scope 別にディレクトリ分割）
+│   ├── all/                     #   全タスク統合モデル
+│   ├── swing_attempt/           #   swing_attempt 専用モデル
+│   ├── outcome/                 #   outcome 専用モデル（SR + BT + Reg）
+│   ├── classification/          #   classification 専用モデル（SA + SR + BT）
+│   └── regression/              #   regression 専用モデル
 ├── docs/                        # GitHub Pages デモサイト
 │   ├── index.html               #   リダイレクトページ
 │   └── viewer_ohtani.html       #   Prediction Viewer デモ
@@ -180,7 +175,7 @@ data:
   dataset_dir: /workspace/datasets/statcast-customized-v2
 
 model:
-  model_scope: all               # "all" | "swing_attempt" | "outcome"
+  model_scope: all               # "all" | "swing_attempt" | "outcome" | "classification" | "regression"
   backbone_type: resdnn           # "dnn" | "resdnn"
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
@@ -204,13 +199,19 @@ train:
 
 ```bash
 # YAML 設定ファイルを指定して実行（全タスク統合モデル）
-python3 src/train.py --config configs/resdnn.yaml
+python3 src/train.py --config configs/all/dnn.yaml
 
 # swing_attempt 専用モデルの学習
-python3 src/train.py --config configs/resdnn_swing_attempt.yaml
+python3 src/train.py --config configs/swing_attempt/dnn.yaml
 
 # outcome 専用モデルの学習（swing_attempt=1 のサンプルのみ使用）
-python3 src/train.py --config configs/resdnn_outcome.yaml
+python3 src/train.py --config configs/outcome/dnn.yaml
+
+# classification 専用モデルの学習（SA + SR + BT、回帰なし）
+python3 src/train.py --config configs/classification/dnn.yaml
+
+# regression 専用モデルの学習（swing_attempt=1 のサンプルのみ使用）
+python3 src/train.py --config configs/regression/dnn.yaml
 
 # デフォルト設定で実行（YAML 不要）
 python3 src/train.py
@@ -232,10 +233,10 @@ python3 src/train.py
 
 ```bash
 # テストデータで評価
-python3 src/test.py --config configs/resdnn.yaml --split test
+python3 src/test.py --config configs/all/resdnn.yaml --split test
 
 # 検証データで評価
-python3 src/test.py --config configs/resdnn.yaml --split val
+python3 src/test.py --config configs/all/resdnn.yaml --split val
 
 # モデルディレクトリ・ファイルを明示的に指定
 python3 src/test.py --model-dir /path/to/model --model-file best_model.pt
@@ -257,7 +258,7 @@ python3 src/test.py --model-dir /path/to/model --model-file best_model.pt
 `--save-predictions` フラグを付けると、サンプルごとの予測値・GT・入力特徴量を NPZ + メタデータ JSON として保存します。後述の [Prediction Viewer](#予測結果の可視化prediction-viewer) で可視化に使用します。
 
 ```bash
-python3 src/test.py --config configs/resdnn.yaml --save-predictions
+python3 src/test.py --config configs/all/resdnn.yaml --save-predictions
 ```
 
 | ファイル | 内容 |
@@ -306,16 +307,18 @@ run_pipeline()
 
 | 設定ファイル例 | scope | 説明 |
 |---|---|---|
-| `dnn.yaml` | all | 基本マルチヘッド DNN (ReLU + BatchNorm) |
-| `dnn_mdn.yaml` | all | 回帰ヘッドを MDN に置換 |
-| `resdnn.yaml` | all | 残差接続 + GELU + LayerNorm |
-| `resdnn_swing_attempt.yaml` | swing_attempt | ResBlock + swing_attempt 専用モデル |
-| `resdnn_outcome.yaml` | outcome | ResBlock + outcome 専用モデル（SA=1 サンプルのみ） |
-| `resdnn_cascade.yaml` | all | ResBlock + カスケードヘッド（ヘッド間情報伝達） |
-| `resdnn_cascade_physics.yaml` | all | ResBlock + カスケード + 物理的整合性損失 |
-| `resdnn_focal.yaml` | all | ResBlock + Focal Loss |
-| `seq_resdnn.yaml` | all | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
-| `seq_resdnn_batter_hist.yaml` | all | 上記 + 階層 GRU 打者履歴エンコーダ |
+| `all/dnn.yaml` | all | 基本マルチヘッド DNN (ReLU + BatchNorm) |
+| `all/dnn_mdn.yaml` | all | 回帰ヘッドを MDN に置換 |
+| `all/resdnn.yaml` | all | 残差接続 + GELU + LayerNorm |
+| `all/resdnn_cascade.yaml` | all | ResBlock + カスケードヘッド（ヘッド間情報伝達） |
+| `all/resdnn_cascade_physics.yaml` | all | ResBlock + カスケード + 物理的整合性損失 |
+| `all/resdnn_focal.yaml` | all | ResBlock + Focal Loss |
+| `all/resdnn_pitch_seq.yaml` | all | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
+| `all/resdnn_pitch_seq_batter_hist.yaml` | all | 上記 + 階層 GRU 打者履歴エンコーダ |
+| `swing_attempt/dnn.yaml` | swing_attempt | swing_attempt 専用モデル |
+| `outcome/dnn.yaml` | outcome | outcome 専用モデル（SA=1 サンプルのみ） |
+| `classification/dnn.yaml` | classification | 3分類タスク専用モデル（回帰なし） |
+| `regression/dnn.yaml` | regression | 回帰専用モデル（SA=1 サンプルのみ） |
 
 各モデルのアーキテクチャ詳細・図解・追加方法は [src/models/README.md](src/models/README.md) を参照してください。
 
@@ -328,7 +331,7 @@ run_pipeline()
 python3 -m tools.export_graph --all
 
 # YAML 設定ファイルから単一モデルを出力
-python3 -m tools.export_graph --config configs/resdnn.yaml
+python3 -m tools.export_graph --config configs/all/resdnn.yaml
 
 # アーキテクチャ名を直接指定
 python3 -m tools.export_graph --arch atbat_dnn_mdn
@@ -387,7 +390,7 @@ python3 -m tools.generate_viewer.metadata
 python3 -m tools.generate_viewer.metadata
 
 # 2. テスト実行時に予測データを保存
-python3 src/test.py --config configs/seq_resdnn_batter_hist.yaml --save-predictions
+python3 src/test.py --config configs/all/resdnn_pitch_seq_batter_hist.yaml --save-predictions
 
 # 3. ビューア HTML を生成
 python3 -m tools.generate_viewer \

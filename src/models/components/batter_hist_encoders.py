@@ -17,15 +17,28 @@ class BaseBatterHistEncoder(nn.Module):
     """
 
     def __init__(
-        self, cfg: ModelConfig, num_cont: int, seq_pitch_type_embed: nn.Embedding, seq_swing_result_embed: nn.Embedding
+        self,
+        cfg: ModelConfig,
+        num_cont: int,
+        seq_pitch_type_embed: nn.Embedding | None = None,
+        seq_swing_result_embed: nn.Embedding | None = None,
     ):
         super().__init__()
         self.cfg = cfg
         self.num_cont = num_cont
 
-        # シーケンスエンコーダと embedding を共有
-        self.seq_pitch_type_embed = seq_pitch_type_embed
-        self.seq_swing_result_embed = seq_swing_result_embed
+        # シーケンスエンコーダと embedding を共有（なければ自前で作成）
+        if seq_pitch_type_embed is not None:
+            self.seq_pitch_type_embed = seq_pitch_type_embed
+        else:
+            pt_num_classes, pt_embed_dim = cfg.embedding_dims["pitch_type"]
+            self.seq_pitch_type_embed = nn.Embedding(pt_num_classes + 1, pt_embed_dim, padding_idx=pt_num_classes)
+
+        if seq_swing_result_embed is not None:
+            self.seq_swing_result_embed = seq_swing_result_embed
+        else:
+            sr_embed_dim = 4
+            self.seq_swing_result_embed = nn.Embedding(cfg.num_swing_result + 1, sr_embed_dim)
 
         pt_embed_dim = cfg.embedding_dims["pitch_type"][1]
         sr_embed_dim = 4

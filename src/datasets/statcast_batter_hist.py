@@ -125,7 +125,8 @@ class StatcastBatterHistDataset(StatcastBaseDataset):
         past_indices = self.atbat_groups[group_idx][:pos]
 
         result = self._base_item(idx)
-        result.update(self._build_seq_features(past_indices, self.max_seq_len))
+        if self.max_seq_len > 0:
+            result.update(self._build_seq_features(past_indices, self.max_seq_len))
 
         # === 打者履歴（事前計算済みインデックスによるベクトル化） ===
         N = self.batter_hist_max_atbats
