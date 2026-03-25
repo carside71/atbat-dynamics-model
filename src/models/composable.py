@@ -5,10 +5,10 @@ import torch.nn as nn
 
 from config import ModelConfig
 from models.components.backbones import BACKBONE_REGISTRY
-from models.components.batter_history import HierarchicalGRUBatterHistoryEncoder
+from models.components.batter_hist_encoders import BATTER_HIST_ENCODER_REGISTRY
 from models.components.embedding import FeatureEmbedding
 from models.components.head_strategies import HEAD_STRATEGY_REGISTRY
-from models.components.seq_encoders import SEQ_ENCODER_REGISTRY
+from models.components.pitch_seq_encoders import PITCH_SEQ_ENCODER_REGISTRY
 
 
 class ComposableModel(nn.Module):
@@ -22,23 +22,22 @@ class ComposableModel(nn.Module):
         self.embedding = FeatureEmbedding(cfg.embedding_dims)
         feat_dim = self.embedding.embed_dim + num_cont + num_ord
 
-        # 2. Sequence Encoder（オプション）
+        # 2. 投球シーケンスエンコーダ（オプション）
         self.seq_encoder = None
-        if cfg.max_seq_len > 0:
-            encoder_cls = SEQ_ENCODER_REGISTRY[cfg.seq_encoder_type]
+        if cfg.pitch_seq_max_len > 0:
+            encoder_cls = PITCH_SEQ_ENCODER_REGISTRY[cfg.pitch_seq_encoder_type]
             self.seq_encoder = encoder_cls(cfg, num_cont)
             feat_dim += self.seq_encoder.output_dim
 
-        # 3. Batter History Encoder（オプション）
+        # 3. 打者履歴エンコーダ（オプション）
         self.hist_encoder = None
         if cfg.batter_hist_max_atbats > 0:
-            if self.seq_encoder is None:
-                raise ValueError("batter_hist_max_atbats > 0 requires max_seq_len > 0 (seq_encoder)")
-            self.hist_encoder = HierarchicalGRUBatterHistoryEncoder(
+            hist_cls = BATTER_HIST_ENCODER_REGISTRY[cfg.batter_hist_encoder_type]
+            self.hist_encoder = hist_cls(
                 cfg,
                 num_cont,
-                seq_pitch_type_embed=self.seq_encoder.seq_pitch_type_embed,
-                seq_swing_result_embed=self.seq_encoder.seq_swing_result_embed,
+                seq_pitch_type_embed=self.seq_encoder.seq_pitch_type_embed if self.seq_encoder else None,
+                seq_swing_result_embed=self.seq_encoder.seq_swing_result_embed if self.seq_encoder else None,
             )
             feat_dim += self.hist_encoder.output_dim
 
@@ -75,6 +74,7 @@ class ComposableModel(nn.Module):
         hist_bb_type: torch.Tensor | None = None,
         hist_launch_speed: torch.Tensor | None = None,
         hist_launch_angle: torch.Tensor | None = None,
+        hist_spray_angle: torch.Tensor | None = None,
         hist_pitch_mask: torch.Tensor | None = None,
         hist_atbat_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -103,6 +103,7 @@ class ComposableModel(nn.Module):
                     hist_bb_type,
                     hist_launch_speed,
                     hist_launch_angle,
+                    hist_spray_angle,
                     hist_pitch_mask,
                     hist_atbat_mask,
                 )

@@ -14,8 +14,7 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 - [テスト・性能評価](#テスト性能評価)
 - [データセット](#データセット)
 - [モデル](#モデル)
-- [モデルグラフの可視化](#モデルグラフの可視化)
-- [予測結果の可視化（Prediction Viewer）](#予測結果の可視化prediction-viewer)
+- [ツール](#ツール)
 
 ## デモ
 
@@ -31,6 +30,8 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 
 ## 概要
 
+### 予測ターゲット
+
 投球情報（球種・球速・変化量・コース・投球軌道）と打席状況（打者・カウント・走者/アウト状況・イニング・点差）を入力として、以下の4つを同時に予測します。
 
 | ヘッド | 出力 | タスク |
@@ -38,68 +39,56 @@ Statcast のデータを用いて未来の打席結果を予測する AI (Deep N
 | swing_attempt | スイングしたか | 二値分類 |
 | swing_result | スイング結果（foul, hit_into_play, miss） | 3クラス分類 |
 | bb_type | 打球種別（ground_ball, fly_ball, line_drive, popup） | 4クラス分類 |
-| regression | launch_speed, launch_angle, hit_distance_sc | 回帰 |
+| regression | launch_speed, launch_angle, hit_distance_sc, spray_angle | 回帰 |
 
 階層的マスク付き損失を使い、スイングしなかった場合の swing_result や、インプレーにならなかった場合の bb_type / 回帰ターゲットは損失計算から除外されます。
+
+### モデルスコープ
+
+`model_scope` 設定により、予測タスクの範囲を切り替えて **分離学習** が可能です。
+
+| `model_scope` | 予測対象 | 学習データ | 用途 |
+|---|---|---|---|
+| `all`（デフォルト） | 全4タスク | 全サンプル | 統合モデル（従来動作） |
+| `swing_attempt` | swing_attempt のみ | 全サンプル | スイング判定の専用モデル |
+| `outcome` | swing_result + bb_type + regression | swing_attempt=1 のみ | スイング後の結果予測専用モデル |
+| `classification` | swing_attempt + swing_result + bb_type | 全サンプル | 3分類タスクのみ（回帰なし） |
+| `regression` | regression のみ | swing_attempt=1 のみ | 回帰予測専用モデル |
+
+タスクごとに分離学習することで、各タスクに最適化された専用モデルを構築できます。
 
 ## プロジェクト構成
 
 ```
 atbat-dynamics-model/
-├── configs/                     # YAML 設定ファイル
-│   ├── dnn.yaml
-│   ├── dnn_change_loss_w.yaml
-│   ├── dnn_mdn.yaml
-│   ├── resdnn.yaml
-│   ├── resdnn_cascade.yaml
-│   ├── resdnn_focal.yaml
-│   ├── seq_resdnn.yaml
-│   └── seq_resdnn_batter_hist.yaml
+├── configs/                     # YAML 設定ファイル（model_scope 別にディレクトリ分割）
+│   ├── all/                     #   全タスク統合モデル
+│   ├── swing_attempt/           #   swing_attempt 専用モデル
+│   ├── outcome/                 #   outcome 専用モデル（SR + BT + Reg）
+│   ├── classification/          #   classification 専用モデル（SA + SR + BT）
+│   └── regression/              #   regression 専用モデル
 ├── docs/                        # GitHub Pages デモサイト
-│   ├── index.html               #   リダイレクトページ
-│   └── viewer_ohtani.html       #   Prediction Viewer デモ
 ├── figs/                        # ドキュメント用画像
-│   ├── viewer_ohtani.html       #   ビューア HTML（オリジナル）
-│   └── viewer_preview.svg       #   README 用プレビュー画像
 ├── src/
 │   ├── config.py                # 設定定義 & YAML 読み込み
 │   ├── train.py                 # 学習スクリプト
 │   ├── test.py                  # テスト・性能評価スクリプト
 │   ├── datasets/                # データセット & 前処理
-│   │   ├── README.md
-│   │   ├── loaders.py           #   データ読み込みユーティリティ
-│   │   ├── statcast.py          #   StatcastDataset（単一投球）
-│   │   ├── statcast_sequence.py #   StatcastSequenceDataset（系列対応）
-│   │   └── statcast_batter_hist.py # StatcastBatterHistDataset（打者履歴対応）
 │   ├── losses/                  # 損失関数
-│   │   ├── focal.py             #   Focal Loss
-│   │   └── multi_task.py        #   マルチタスク損失 & MDN 損失
 │   ├── models/                  # モデルアーキテクチャ
-│   │   ├── README.md
-│   │   ├── atbat_dnn.py         #   基本マルチヘッド DNN
-│   │   ├── atbat_dnn_mdn.py     #   DNN + MDN 回帰ヘッド
-│   │   ├── atbat_resdnn.py      #   残差接続 + GELU
-│   │   ├── atbat_resdnn_cascade.py  # カスケードヘッド付き
-│   │   ├── atbat_seq_resdnn.py  #   系列エンコーダ + ResBlock
-│   │   └── atbat_seq_resdnn_batter_hist.py # 打者履歴エンコーダ付き
-│   └── utils/
-│       ├── graph_export.py      # モデルグラフ可視化
-│       ├── logging.py           # ログ出力
-│       └── model_io.py          # モデル構築・保存・復元
+│   └── utils/                   # ユーティリティ関数群
+├── tests/                       # テストコード
 ├── notes/                       # データ構築・分析ノートブック
 │   ├── 00_build_dataset/        #   前処理パイプライン
-│   ├── 01_analysis/             #   データ分析
-│   └── locals/                  #   ローカル実行用スクリプト
+│   └── 01_analysis/             #   データ分析
 ├── scripts/
-│   ├── add_game_info_and_rebuild.py  # game_pk/game_date 付与 & 時系列分割 & 打者履歴構築
-│   ├── export_model_graph.py    # モデルグラフ構造の画像出力
 │   ├── run_container_mac.sh     # Mac 用コンテナ起動
 │   └── run_container_wsl.sh     # WSL 用コンテナ起動
 ├── tools/
-│   ├── build_metadata.py        # ビューア用メタデータ構築（選手名・試合情報）
-│   ├── generate_viewer.py       # 予測ビューア HTML 生成 CLI
-│   ├── viewer_builder.py        # データ変換・HTML 組み立て
-│   └── viewer_template.html     # ビューア HTML テンプレート
+│   ├── build_dataset/           # データセット構築パイプライン
+│   ├── export_graph/            # モデルグラフ構造の画像出力
+│   ├── generate_viewer/         # 予測ビューア HTML 生成
+│   └── plot_curves/             # 学習曲線プロット
 ├── Dockerfile
 ├── pyproject.toml
 └── requirements.txt
@@ -139,12 +128,11 @@ YAML ファイル（`configs/` ディレクトリ）で `data`, `model`, `train`
 
 ```yaml
 data:
-  data_dir: /workspace/datasets/statcast-customized/data
-  stats_dir: /workspace/datasets/statcast-customized/stats
-  split_dir: /workspace/datasets/statcast-customized/split
+  dataset_dir: /workspace/datasets/statcast-customized-v2
 
 model:
-  architecture: atbat_resdnn     # モデル名
+  model_scope: all               # "all" | "swing_attempt" | "outcome" | "classification" | "regression"
+  backbone_type: resdnn           # "dnn" | "resdnn"
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2
@@ -157,6 +145,8 @@ train:
   focal_gamma: 0.0       # > 0 で Focal Loss 有効
   use_class_weight: false # true でクラス頻度の逆数重み付け
   label_smoothing: 0.0   # > 0 で Label Smoothing 有効（0.1 程度が一般的）
+  loss_weight_physics: 0.0      # > 0 で物理的整合性損失を有効化（0.001〜0.01 推奨）
+  physics_margin_degrees: 2.0   # 境界付近のマージン（度）
 ```
 
 設定可能な全フィールドは `src/config.py` および `configs/` 内の各 YAML ファイルを参照してください。
@@ -164,8 +154,20 @@ train:
 ## 学習
 
 ```bash
-# YAML 設定ファイルを指定して実行
-python3 src/train.py --config configs/resdnn.yaml
+# YAML 設定ファイルを指定して実行（全タスク統合モデル）
+python3 src/train.py --config configs/all/dnn.yaml
+
+# swing_attempt 専用モデルの学習
+python3 src/train.py --config configs/swing_attempt/dnn.yaml
+
+# outcome 専用モデルの学習（swing_attempt=1 のサンプルのみ使用）
+python3 src/train.py --config configs/outcome/dnn.yaml
+
+# classification 専用モデルの学習（SA + SR + BT、回帰なし）
+python3 src/train.py --config configs/classification/dnn.yaml
+
+# regression 専用モデルの学習（swing_attempt=1 のサンプルのみ使用）
+python3 src/train.py --config configs/regression/dnn.yaml
 
 # デフォルト設定で実行（YAML 不要）
 python3 src/train.py
@@ -187,10 +189,10 @@ python3 src/train.py
 
 ```bash
 # テストデータで評価
-python3 src/test.py --config configs/resdnn.yaml --split test
+python3 src/test.py --config configs/all/resdnn.yaml --split test
 
 # 検証データで評価
-python3 src/test.py --config configs/resdnn.yaml --split val
+python3 src/test.py --config configs/all/resdnn.yaml --split val
 
 # モデルディレクトリ・ファイルを明示的に指定
 python3 src/test.py --model-dir /path/to/model --model-file best_model.pt
@@ -212,7 +214,7 @@ python3 src/test.py --model-dir /path/to/model --model-file best_model.pt
 `--save-predictions` フラグを付けると、サンプルごとの予測値・GT・入力特徴量を NPZ + メタデータ JSON として保存します。後述の [Prediction Viewer](#予測結果の可視化prediction-viewer) で可視化に使用します。
 
 ```bash
-python3 src/test.py --config configs/resdnn.yaml --save-predictions
+python3 src/test.py --config configs/all/resdnn.yaml --save-predictions
 ```
 
 | ファイル | 内容 |
@@ -222,184 +224,52 @@ python3 src/test.py --config configs/resdnn.yaml --save-predictions
 
 ## データセット
 
-`/workspace/datasets/statcast-customized/` に配置された Statcast データを使用します。
+`/workspace/datasets/statcast-customized-v2/` にフラット構造で配置されたデータセットを使用します。
 
-| ディレクトリ | 内容 |
+| ファイル | 内容 |
 |---|---|
-| `data/` | 年月別の Parquet ファイル（例: `statcast_2024_04.parquet`） |
-| `stats/` | カテゴリカル特徴量のラベル対応テーブル（CSV） |
-| `split/` | 学習/検証/テスト分割の `at_bat_id` リスト（CSV）※時系列分割 |
-| `batter_history/` | 打者履歴ルックアップテーブル（Parquet） |
+| `pitches.parquet` | 全投球データ（単一ファイル） |
+| `stats_*.csv` | カテゴリカル特徴量のラベル対応テーブル |
+| `train_at_bat_ids.csv` / `valid_at_bat_ids.csv` / `test_at_bat_ids.csv` | 時系列分割の `at_bat_id` リスト |
+| `batter_game_history.parquet` / `atbat_row_indices.parquet` | 打者履歴ルックアップテーブル |
+| `atbat_metadata.parquet` / `player_names.json` | ビューア用メタデータ |
 
 データ分割は **時系列分割**（`game_date` ベース）で行われます。学習データは 2024-06-30 以前、検証データは 2024-07-01〜2024-10-30、テストデータは 2025-03-15 以降です。ダブルヘッダーを正しく区別するため `game_pk`（試合ごとに一意な ID）を使用します。
 
-前処理は `notes/00_build_dataset/` 配下のノートブックで段階的に実行します。打者履歴テーブルの構築は `scripts/add_game_info_and_rebuild.py` で行います。
+`tools/build_dataset/` パッケージにモジュール化されたパイプラインで構築します。詳細は [tools/README.md](tools/README.md) を参照してください。
 
 データセットクラスや読み込みユーティリティの詳細は [src/datasets/README.md](src/datasets/README.md) を参照してください。
 
 ## モデル
 
-すべてのモデルは **埋め込み → バックボーン → マルチヘッド** の3段構成で、レジストリパターンで管理されています。
+すべてのモデルは `ComposableModel` が **埋め込み → バックボーン → マルチヘッド** の各コンポーネントを YAML 設定に基づいて組み立てる構成で、レジストリパターン (`utils/registry.py`) で管理されています。
 
-| `architecture` | 設定ファイル例 | 説明 |
+| 設定ファイル例 | scope | 説明 |
 |---|---|---|
-| `atbat_dnn` | `dnn.yaml` | 基本マルチヘッド DNN (ReLU + BatchNorm) |
-| `atbat_dnn_mdn` | `dnn_mdn.yaml` | 回帰ヘッドを MDN に置換 |
-| `atbat_resdnn` | `resdnn.yaml` | 残差接続 + GELU + LayerNorm |
-| `atbat_resdnn_cascade` | `resdnn_cascade.yaml` | 上記 + カスケードヘッド（ヘッド間情報伝達） |
-| `atbat_seq_resdnn` | `seq_resdnn.yaml` | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
-| `atbat_seq_resdnn_batter_hist` | `seq_resdnn_batter_hist.yaml` | 上記 + 階層 GRU 打者履歴エンコーダ |
+| `all/dnn.yaml` | all | 基本マルチヘッド DNN (ReLU + BatchNorm) |
+| `all/dnn_mdn.yaml` | all | 回帰ヘッドを MDN に置換 |
+| `all/resdnn.yaml` | all | 残差接続 + GELU + LayerNorm |
+| `all/resdnn_cascade.yaml` | all | ResBlock + カスケードヘッド（ヘッド間情報伝達） |
+| `all/resdnn_cascade_physics.yaml` | all | ResBlock + カスケード + 物理的整合性損失 |
+| `all/resdnn_focal.yaml` | all | ResBlock + Focal Loss |
+| `all/resdnn_pitch_seq.yaml` | all | 打席内系列エンコーダ (GRU/Transformer) + ResBlock |
+| `all/resdnn_pitch_seq_batter_hist.yaml` | all | 上記 + 階層 GRU 打者履歴エンコーダ |
+| `swing_attempt/dnn.yaml` | swing_attempt | swing_attempt 専用モデル |
+| `outcome/dnn.yaml` | outcome | outcome 専用モデル（SA=1 サンプルのみ） |
+| `classification/dnn.yaml` | classification | 3分類タスク専用モデル（回帰なし） |
+| `regression/dnn.yaml` | regression | 回帰専用モデル（SA=1 サンプルのみ） |
 
 各モデルのアーキテクチャ詳細・図解・追加方法は [src/models/README.md](src/models/README.md) を参照してください。
 
-## モデルグラフの可視化
+## ツール
 
-登録済みモデルの計算グラフ構造を画像ファイル（PNG / PDF / SVG）として出力できます。
+`tools/` ディレクトリには、データセット構築・モデル可視化・学習分析などの各種ユーティリティが含まれています。すべて `python -m tools.<ツール名>` で実行できます。
 
-```bash
-# 全モデルを一括出力
-python3 scripts/export_model_graph.py --all
-
-# YAML 設定ファイルから単一モデルを出力
-python3 scripts/export_model_graph.py --config configs/resdnn.yaml
-
-# アーキテクチャ名を直接指定
-python3 scripts/export_model_graph.py --arch atbat_dnn_mdn
-```
-
-### オプション
-
-| オプション | デフォルト | 説明 |
-|---|---|---|
-| `--config` | — | YAML 設定ファイルパス（排他） |
-| `--arch` | — | アーキテクチャ名（排他） |
-| `--all` | — | 全登録モデルを出力（排他） |
-| `--output-dir` | `outputs/graphs` | 保存先ディレクトリ |
-| `--format` | `png` | 出力形式（`png` / `pdf` / `svg`） |
-| `--backend` | `torchview` | 描画バックエンド（`torchview` / `torchviz`） |
-| `--depth` | `3` | モジュール展開深度（torchview のみ） |
-| `--batch-size` | `2` | ダミー入力のバッチサイズ |
-
-### バックエンド
-
-- **torchview**（推奨）: モジュール階層を構造的に描画。`--depth` で展開の深さを制御可能
-- **torchviz**: autograd の計算グラフを描画。各演算ノードが詳細に表示される
-
-### 依存パッケージ
-
-- Python: `torchview`, `torchviz`, `graphviz`（`requirements.txt` に記載済み）
-- システム: `graphviz`（`apt-get install graphviz`、Dockerfile に記載済み）
-
-## 予測結果の可視化（Prediction Viewer）
-
-テスト結果をサンプル単位でインタラクティブに閲覧できる自己完結型 HTML ビューアを生成します。
-
-### 前準備: メタデータの構築
-
-ビューアで試合情報（選手名・チーム・日付など）を表示するには、事前にメタデータを構築しておく必要があります。**初回のみ実行すれば OK です**（データセットが変わらない限り再実行不要）。
-
-```bash
-python3 tools/build_metadata.py
-```
-
-処理内容:
-1. `data/` と `preprocess_01/` の Parquet を行位置ベースで結合し、打席ごとのメタデータ（打者/投手 MLBAM ID・チーム・打席番号）を抽出
-2. 元の Statcast CSV から投手名を収集
-3. MLB Stats API から打者名を一括取得
-4. `atbat_metadata.parquet` と `player_names.json` を出力
-
-| オプション | デフォルト | 説明 |
-|---|---|---|
-| `--data-dir` | `/workspace/datasets/statcast-customized/data` | 最終 data Parquet ディレクトリ |
-| `--preprocess-dir` | `/workspace/datasets/statcast-customized-tmp/preprocess_01` | preprocess_01 Parquet ディレクトリ |
-| `--output-dir` | `/workspace/datasets/statcast-customized/metadata` | メタデータ出力先 |
-| `--raw-csv-dir` | `/workspace/datasets/statcast` | 元の Statcast CSV ディレクトリ（省略可） |
-
-生成ファイル:
-
-| ファイル | 内容 |
+| ツール | 説明 |
 |---|---|
-| `atbat_metadata.parquet` | at_bat_id → 打者/投手 MLBAM ID, game_pk, チーム, 打席番号 |
-| `player_names.json` | MLBAM ID → 選手名 (`"Last, First"` 形式) |
+| `build_dataset` | Statcast データからモデル学習用データセットを構築するパイプライン |
+| `export_graph` | モデルの計算グラフ構造を画像（PNG / PDF / SVG）として出力 |
+| `generate_viewer` | テスト結果をインタラクティブに閲覧できる自己完結型 HTML ビューアを生成 |
+| `plot_curves` | `train.py` の学習履歴（`history.json`）から学習曲線をプロット |
 
-### 使い方
-
-```bash
-# 1. メタデータ構築（初回のみ）
-python3 tools/build_metadata.py
-
-# 2. テスト実行時に予測データを保存
-python3 src/test.py --config configs/seq_resdnn_batter_hist.yaml --save-predictions
-
-# 3. ビューア HTML を生成
-python3 tools/generate_viewer.py \
-  --pred-dir outputs/.../test/2026-03-20-120000 \
-  --max-samples 3000
-
-# 4. ブラウザで開く
-# 生成された viewer.html をブラウザで開くだけで動作（外部依存なし）
-```
-
-#### 特定の打者だけのビューアを生成
-
-`--batter` オプションで打者を指定すると、その打者の全データだけを含むビューアが生成されます。
-
-```bash
-# MLBAM ID で指定
-python3 tools/generate_viewer.py \
-  --pred-dir outputs/.../test/2026-03-20-120000 \
-  --batter 660271
-
-# 名前の一部で指定（部分一致検索）
-python3 tools/generate_viewer.py \
-  --pred-dir outputs/.../test/2026-03-20-120000 \
-  --batter Ohtani
-```
-
-`--batter` 指定時は自動的に `filter=all`（全サンプル）、`max-samples=100000`（実質無制限）に調整されます。
-
-### ビューア画面
-
-1枚の "カード" に1サンプル（1投球）の全情報がまとまっています:
-
-- **試合情報**: 打者名・投手名（MLBAM ID 付き）、対戦チーム、日付、Game ID、打席番号（メタデータ構築済みの場合）
-- **入力情報**: 球種・投手投げ手・打席・カウント・走者/アウト状況・球速・回転数など
-- **ストライクゾーン**: SVG で投球コースを描画（ゾーン内/外で色分け）
-- **Swing Attempt**: 予測確率バー + GT との正誤
-- **Swing Result**: 3クラス確率バー（foul / hit_into_play / miss）
-- **BB Type**: 4クラス確率バー（ground_ball / fly_ball / line_drive / popup）
-- **Regression**: launch_speed / launch_angle / hit_distance の予測値・GT・誤差
-
-### 操作方法
-
-| 操作 | 説明 |
-|---|---|
-| `←` / `→` キー | 前後のサンプルに移動 |
-| `Home` / `End` | 先頭 / 最後に移動 |
-| Prev / Next ボタン | クリックで前後移動 |
-| サンプル番号入力 | 直接ジャンプ |
-| フィルタドロップダウン | 全て / SA誤分類 / SR誤分類 / BT誤分類 / いずれか誤分類 |
-
-### generate_viewer.py のオプション
-
-| オプション | デフォルト | 説明 |
-|---|---|---|
-| `--pred-dir` | （必須） | `predictions_*.npz` と `predictions_meta_*.json` があるディレクトリ |
-| `--split` | `test` | 評価スプリット（`test` / `val`） |
-| `--max-samples` | `2000` | HTML に含める最大サンプル数 |
-| `--filter` | `random` | サンプル選択フィルタ（`all` / `misclassified_sa` / `misclassified_sr` / `misclassified_bt` / `random` / `include_invalid`） |
-| `--sort` | `index` | ソート基準（`index` / `sa_error` / `reg_error`） |
-| `--output` | `pred-dir/viewer.html` | 出力 HTML ファイルパス |
-| `--seed` | `42` | `random` フィルタ時のシード |
-| `--metadata-dir` | `/workspace/datasets/statcast-customized/metadata` | メタデータディレクトリ（試合情報・選手名表示用） |
-| `--batter` | — | 特定の打者のみ表示（MLBAM ID または名前の一部） |
-
-### データサイズの目安
-
-| サンプル数 | HTML ファイルサイズ |
-|---|---|
-| 2,000 | 〜3 MB |
-| 5,000 | 〜7 MB |
-| 10,000 | 〜14 MB |
-
-生成された HTML は CSS・JavaScript・データ全てを内包しており、ブラウザで開くだけで動作します。
+各ツールの詳細な使い方・オプションは [tools/README.md](tools/README.md) を参照してください。

@@ -11,12 +11,14 @@ models/
   composable.py        # ComposableModel: コンポーネントを組み立てるモデル本体
   components/
     embedding.py       # FeatureEmbedding
-    backbones.py       # DNNBackbone, ResDNNBackbone
+    backbones.py       # DNNBackbone, ResDNNBackbone（レジストリ登録）
     heads.py           # build_mlp_head(), MDNHead
-    seq_encoders.py    # GRUSeqEncoder, TransformerSeqEncoder
-    batter_history.py  # HierarchicalGRUBatterHistoryEncoder
+    pitch_seq_encoders.py    # GRUPitchSeqEncoder, TransformerPitchSeqEncoder（レジストリ登録）
+    batter_hist_encoders.py  # GRUBatterHistEncoder, TransformerBatterHistEncoder（レジストリ登録）
     head_strategies.py # IndependentHeadStrategy, CascadeHeadStrategy
 ```
+
+レジストリパターンは `utils/registry.py` の `make_registry()` で統一的に管理されています。
 
 ---
 
@@ -40,24 +42,34 @@ models/
 <tr>
   <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">過去投球系列 <i>(opt)</i></td>
   <td style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
-  <td style="background:#f3e5f5; border:2px solid #ab47bc; border-radius:8px; padding:10px 16px; text-align:center;"><b>SeqEncoder</b></td>
+  <td style="background:#f3e5f5; border:2px solid #ab47bc; border-radius:8px; padding:10px 16px; text-align:center;"><b>PitchSeqEncoder</b><br><sub>GRU / Transformer</sub></td>
 </tr>
 <tr>
   <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">打者履歴 <i>(opt)</i></td>
   <td style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
-  <td style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center;"><b>BatterHistEncoder</b></td>
+  <td style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center;"><b>BatterHistEncoder</b><br><sub>GRU / Transformer</sub></td>
 </tr>
 </table>
 </div>
 
-### 出力（全構成共通）
+### 出力
+
+出力辞書に含まれるキーは `model_scope` 設定によって変化します。
+
+| `model_scope` | 出力キー | 用途 |
+|---|---|---|
+| `all`（デフォルト） | `swing_attempt`, `swing_result`, `bb_type`, `regression` | 全タスク統合モデル |
+| `swing_attempt` | `swing_attempt` | スイング判定専用モデル |
+| `outcome` | `swing_result`, `bb_type`, `regression` | スイング後の結果予測専用モデル |
+| `classification` | `swing_attempt`, `swing_result`, `bb_type` | 3分類タスクのみ（回帰なし） |
+| `regression` | `regression` | 回帰予測専用モデル |
 
 | キー | 形状 | 内容 |
 |---|---|---|
 | `swing_attempt` | `(B,)` | スイング試行 logit (binary) |
 | `swing_result` | `(B, num_swing_result)` | スイング結果 logits |
 | `bb_type` | `(B, num_bb_type)` | 打球タイプ logits |
-| `regression` | `(B, 3)` or `dict` | launch_speed, launch_angle, hit_distance_sc（MDN の場合は `pi`, `mu`, `sigma` の dict） |
+| `regression` | `(B, D)` or `dict` | launch_speed, launch_angle, hit_distance_sc, spray_angle（MDN の場合は `pi`, `mu`, `sigma` の dict）。D = `num_reg_targets`（デフォルト 4） |
 
 ---
 
@@ -181,7 +193,15 @@ YAML の `backbone_type` で選択。
 
 ### 3. Head Strategy (`components/head_strategies.py`)
 
-YAML の `head_strategy` で選択。
+YAML の `head_strategy` で選択。`model_scope` に応じて構築されるヘッドが変化します。
+
+| `model_scope` | `independent` | `cascade` |
+|---|---|---|
+| `all` | 4ヘッド並列（従来動作） | SA→SR→BT→Reg カスケード（従来動作） |
+| `swing_attempt` | SA ヘッドのみ | SA ヘッドのみ |
+| `outcome` | SR + BT + Reg ヘッド並列 | SR→BT→Reg カスケード（SA なし） |
+| `classification` | SA + SR + BT ヘッド並列 | SA→SR→BT カスケード（Reg なし） |
+| `regression` | Reg ヘッドのみ | Reg ヘッドのみ（backbone 出力直結） |
 
 #### `independent` — 独立ヘッド（デフォルト）
 
@@ -207,7 +227,7 @@ YAML の `head_strategy` で選択。
 <tr>
   <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>MLP / MDN</b></td>
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression <code>(B, 3)</code></td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression <code>(B, D)</code></td>
 </tr>
 </table>
 </div>
@@ -244,12 +264,15 @@ YAML の `head_strategy` で選択。
   <td colspan="2" style="border:none;"></td>
   <td style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:6px 14px; text-align:center;"><b>Reg Head</b></td>
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;">regression <code>(B, D)</code></td>
 </tr>
 </table>
 </div>
 
 - **カスケードの流れ**: `h → SA → [h,sa] → SR → [h,sr] → BT → [h,bt] → Reg`
+- **`model_scope="outcome"` 時**: SA ヘッドが省略され `h → SR → [h,sr] → BT → [h,bt] → Reg` となる
+- **`model_scope="classification"` 時**: Reg ヘッドが省略され `h → SA → [h,sa] → SR → [h,sr] → BT` となる
+- **`model_scope="regression"` 時**: 分類ヘッドが省略され `h → Reg` となる（backbone 出力直結）
 - **`detach_cascade`**: `true` にすると上流ヘッドからの勾配を `detach` し、下流ヘッド学習時に上流を更新しない
 - **設計意図**: スイング試行 → スイング結果 → 打球タイプ → 回帰値 という因果構造を反映
 
@@ -261,7 +284,7 @@ YAML の `regression_head_type` で選択。
 
 #### `mlp`（デフォルト）
 
-通常の MLP ヘッド。出力 `(B, 3)`。
+通常の MLP ヘッド。出力 `(B, D)`。D = `num_reg_targets`（デフォルト 4）。
 
 #### `mdn` — Mixture Density Network
 
@@ -280,13 +303,13 @@ YAML の `regression_head_type` で選択。
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
   <td style="background:#fff3e0; border:1px solid #ffe0b2; border-radius:6px; padding:4px 10px; font-size:13px; text-align:center;">fc_mu → <b>reshape</b></td>
   <td style="border:none; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>μ</b> (B, K, 3) 平均</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>μ</b> (B, K, D) 平均</td>
 </tr>
 <tr>
   <td style="border:none; text-align:center; font-size:18px; color:#546e7a;">→</td>
   <td style="background:#fff3e0; border:1px solid #ffe0b2; border-radius:6px; padding:4px 10px; font-size:13px; text-align:center;">fc_sigma → <b>Softplus</b></td>
   <td style="border:none; color:#546e7a;">→</td>
-  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>σ</b> (B, K, 3) 標準偏差</td>
+  <td style="background:#fffde7; border:1px solid #fdd835; border-radius:6px; padding:6px 12px; font-size:13px;"><b>σ</b> (B, K, D) 標準偏差</td>
 </tr>
 </table>
 </div>
@@ -297,9 +320,9 @@ YAML の `regression_head_type` で選択。
 
 ---
 
-### 5. Sequence Encoder (`components/seq_encoders.py`)
+### 5. PitchSeqEncoder (`components/pitch_seq_encoders.py`)
 
-`max_seq_len > 0` のとき有効化。YAML の `seq_encoder_type` で選択。
+`pitch_seq_max_len > 0` のとき有効化。YAML の `pitch_seq_encoder_type` で選択。
 
 同一打席内の過去投球系列をエンコードする。
 
@@ -314,7 +337,7 @@ YAML の `regression_head_type` で選択。
   <td rowspan="4" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px; vertical-align:middle;">→</td>
   <td rowspan="4" style="background:#f3e5f5; border:2px solid #ab47bc; border-radius:8px; padding:10px 16px; text-align:center; vertical-align:middle;"><b>Encoder</b></td>
   <td rowspan="4" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px; vertical-align:middle;">→</td>
-  <td rowspan="4" style="background:#fffde7; border:2px solid #fdd835; border-radius:8px; padding:8px 14px; text-align:center; font-size:13px; vertical-align:middle;"><b>(B, seq_out_dim)</b></td>
+  <td rowspan="4" style="background:#fffde7; border:2px solid #fdd835; border-radius:8px; padding:8px 14px; text-align:center; font-size:13px; vertical-align:middle;"><b>(B, pitch_seq_out_dim)</b></td>
 </tr>
 <tr>
   <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px;">seq_swing_result</td>
@@ -340,17 +363,17 @@ YAML の `regression_head_type` で選択。
 
 #### `transformer` — Transformer エンコーダ
 
-- `Linear` で入力を `seq_hidden_dim` に射影後、`TransformerEncoder` で処理
+- `Linear` で入力を `pitch_seq_hidden_dim` に射影後、`TransformerEncoder` で処理
 - `src_key_padding_mask` でパディング位置をマスク
 - マスク付き平均プーリングで固定長ベクトル化
 
 ---
 
-### 6. Batter History Encoder (`components/batter_history.py`)
+### 6. BatterHistEncoder (`components/batter_hist_encoders.py`)
 
-`batter_hist_max_atbats > 0` のとき有効化。`max_seq_len > 0`（SeqEncoder 有効）が前提。
+`batter_hist_max_atbats > 0` のとき有効化。`pitch_seq_max_len > 0`（PitchSeqEncoder 有効）が前提。YAML の `batter_hist_encoder_type` で選択。
 
-打者の直近 N 打席の Statcast 全投球データを階層 GRU でエンコードする。
+打者の直近 N 打席の Statcast 全投球データをエンコードする。
 
 <div align="center">
 <table style="border-collapse: separate; border-spacing: 4px 3px;">
@@ -370,23 +393,25 @@ YAML の `regression_head_type` で選択。
 </tr>
 <tr>
   <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
-    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1)</span>
+    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1) + spray_angle (1)</span>
   </td>
 </tr>
 <tr>
-  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 6)</td>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 7)</td>
 </tr>
 <tr>
   <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
-    <span style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center; display:inline-block; padding:8px 20px;"><b>Outer GRU</b> → h_n[-1] → <b>(B, D_hist_out)</b></span>
+    <span style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center; display:inline-block; padding:8px 20px;"><b>Outer Encoder</b> (GRU / Transformer) → <b>(B, D_hist_out)</b></span>
   </td>
 </tr>
 </table>
 </div>
 
-- **Inner GRU**: 各打席の投球列を 1 本の打席ベクトルに圧縮
-- **Outer GRU**: N 打席分の打席ベクトル列を時系列処理して打者の傾向ベクトルに圧縮
-- `pitch_type` / `swing_result` の Embedding は SeqEncoder と **重みを共有**
+- **Inner GRU**: 各打席の投球列を 1 本の打席ベクトルに圧縮（全サブクラス共通）
+- **Outer Encoder**: N 打席分の打席ベクトル列を処理して打者の傾向ベクトルに圧縮
+  - `gru`: Outer GRU で最終隠れ状態を出力
+  - `transformer`: Linear 射影 → TransformerEncoder → マスク付き平均プーリング
+- `pitch_type` / `swing_result` の Embedding は PitchSeqEncoder と **重みを共有**
 - 投球がない打席・履歴がない打者はゼロベクトル
 
 ---
@@ -397,6 +422,7 @@ YAML の `regression_head_type` で選択。
 
 | フィールド | デフォルト | 選択肢 | 説明 |
 |---|---|---|---|
+| `model_scope` | `"all"` | `"all"`, `"swing_attempt"`, `"outcome"`, `"classification"`, `"regression"` | 予測タスクの範囲 |
 | `backbone_type` | `"resdnn"` | `"dnn"`, `"resdnn"` | Backbone の種類 |
 | `backbone_hidden` | `[512, 256, 128]` | — | 各層の隠れ次元 |
 | `dropout` | `0.2` | — | Dropout 率 |
@@ -406,15 +432,16 @@ YAML の `regression_head_type` で選択。
 | `detach_cascade` | `true` | — | cascade 時に上流勾配を detach |
 | `regression_head_type` | `"mlp"` | `"mlp"`, `"mdn"` | 回帰ヘッドの種類 |
 | `mdn_num_components` | `5` | — | MDN のガウス成分数 |
-| `max_seq_len` | `0` | — | 0: 無効、>0: 投球系列エンコーダ有効 |
-| `seq_encoder_type` | `"gru"` | `"gru"`, `"transformer"` | 系列エンコーダの種類 |
-| `seq_hidden_dim` | `64` | — | 系列エンコーダの隠れ次元 |
-| `seq_num_layers` | `1` | — | 系列エンコーダの層数 |
-| `seq_bidirectional` | `false` | — | GRU のみ: 双方向フラグ |
+| `pitch_seq_max_len` | `0` | — | 0: 無効、>0: 投球シーケンスエンコーダ有効 |
+| `pitch_seq_encoder_type` | `"gru"` | `"gru"`, `"transformer"` | 投球シーケンスエンコーダの種類 |
+| `pitch_seq_hidden_dim` | `64` | — | 投球シーケンスエンコーダの隠れ次元 |
+| `pitch_seq_num_layers` | `1` | — | 投球シーケンスエンコーダの層数 |
+| `pitch_seq_bidirectional` | `false` | — | GRU のみ: 双方向フラグ |
 | `batter_hist_max_atbats` | `0` | — | 0: 無効、>0: 打者履歴エンコーダ有効 |
 | `batter_hist_max_pitches` | `10` | — | 各打席の最大投球数 |
-| `batter_hist_hidden_dim` | `64` | — | 打者履歴 GRU の隠れ次元 |
-| `batter_hist_num_layers` | `1` | — | Outer GRU の層数 |
+| `batter_hist_encoder_type` | `"gru"` | `"gru"`, `"transformer"` | 打者履歴エンコーダの種類 |
+| `batter_hist_hidden_dim` | `64` | — | 打者履歴エンコーダの隠れ次元 |
+| `batter_hist_num_layers` | `1` | — | Outer エンコーダの層数 |
 
 ### 設定例
 
@@ -464,7 +491,7 @@ model:
   detach_cascade: true
 ```
 
-#### ResBlock DNN + GRU 系列エンコーダ
+#### ResBlock DNN + GRU 投球シーケンスエンコーダ
 
 ```yaml
 model:
@@ -472,14 +499,14 @@ model:
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2
-  max_seq_len: 10
-  seq_encoder_type: gru
-  seq_hidden_dim: 64
-  seq_num_layers: 1
-  seq_bidirectional: false
+  pitch_seq_max_len: 10
+  pitch_seq_encoder_type: gru
+  pitch_seq_hidden_dim: 64
+  pitch_seq_num_layers: 1
+  pitch_seq_bidirectional: false
 ```
 
-#### ResBlock DNN + GRU 系列 + 打者履歴
+#### ResBlock DNN + GRU 投球シーケンス + 打者履歴
 
 ```yaml
 model:
@@ -487,16 +514,79 @@ model:
   backbone_hidden: [512, 512, 256, 256, 128]
   head_hidden: [64]
   dropout: 0.2
-  max_seq_len: 10
-  seq_encoder_type: gru
-  seq_hidden_dim: 64
-  seq_num_layers: 1
-  seq_bidirectional: false
+  pitch_seq_max_len: 10
+  pitch_seq_encoder_type: gru
+  pitch_seq_hidden_dim: 64
+  pitch_seq_num_layers: 1
+  pitch_seq_bidirectional: false
   batter_hist_max_atbats: 50
   batter_hist_max_pitches: 10
+  batter_hist_encoder_type: gru
   batter_hist_hidden_dim: 64
   batter_hist_num_layers: 1
 ```
+
+#### swing_attempt 専用モデル
+
+```yaml
+model:
+  model_scope: swing_attempt
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+```
+
+#### outcome 専用モデル（swing_attempt=1 サンプルのみで学習）
+
+```yaml
+model:
+  model_scope: outcome
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+```
+
+#### classification 専用モデル（SA/SR/BT の3分類、回帰なし）
+
+```yaml
+model:
+  model_scope: classification
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+```
+
+#### regression 専用モデル（swing_attempt=1 サンプルのみで学習）
+
+```yaml
+model:
+  model_scope: regression
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+```
+
+#### ResBlock + カスケード + 物理的整合性損失
+
+```yaml
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  head_strategy: cascade
+  detach_cascade: true
+
+train:
+  loss_weight_physics: 0.01       # 物理的整合性損失の重み（0.0 で無効）
+  physics_margin_degrees: 2.0     # 境界マージン（度）
+```
+
+bb_type と launch_angle、swing_result と spray_angle の間の物理的整合性をソフトペナルティで強制する。分類予測の softmax 確率で重み付けした `torch.relu` ベースの微分可能ペナルティを既存のタスク損失に加算する。MDN ヘッドにも対応（期待値 E[y] = Σ π_k * μ_k を使用）。
 
 #### 新しい組み合わせ例: ResBlock + カスケード + MDN
 
@@ -514,6 +604,8 @@ model:
 ---
 
 ## コンポーネントの追加方法
+
+Backbone と Sequence Encoder は `utils/registry.py` の `make_registry()` で生成されたレジストリとデコレータで管理されています。`@register_xxx("name")` デコレータを付けてクラスを定義するだけで、YAML から `name` で参照可能になります。
 
 ### 新しい Backbone を追加
 
@@ -537,13 +629,13 @@ class MyBackbone(nn.Module):
 
 YAML で `backbone_type: my_backbone` を指定するだけで利用可能。
 
-### 新しい Sequence Encoder を追加
+### 新しい PitchSeqEncoder を追加
 
-`components/seq_encoders.py` にクラスを追加し、レジストリに登録する。
+`components/pitch_seq_encoders.py` にクラスを追加し、レジストリに登録する。
 
 ```python
-@register_seq_encoder("my_encoder")
-class MySeqEncoder(BaseSeqEncoder):
+@register_pitch_seq_encoder("my_encoder")
+class MyPitchSeqEncoder(BasePitchSeqEncoder):
     def __init__(self, cfg: ModelConfig, num_cont: int):
         super().__init__(cfg, num_cont)
         ...
@@ -558,7 +650,32 @@ class MySeqEncoder(BaseSeqEncoder):
         ...
 ```
 
-YAML で `seq_encoder_type: my_encoder` を指定するだけで利用可能。
+YAML で `pitch_seq_encoder_type: my_encoder` を指定するだけで利用可能。
+
+### 新しい BatterHistEncoder を追加
+
+`components/batter_hist_encoders.py` にクラスを追加し、レジストリに登録する。
+
+```python
+@register_batter_hist_encoder("my_encoder")
+class MyBatterHistEncoder(BaseBatterHistEncoder):
+    def __init__(self, cfg, num_cont, seq_pitch_type_embed, seq_swing_result_embed):
+        super().__init__(cfg, num_cont, seq_pitch_type_embed, seq_swing_result_embed)
+        ...
+        self._output_dim = ...
+
+    @property
+    def output_dim(self) -> int:
+        return self._output_dim
+
+    def forward(self, hist_pitch_type, hist_cont, hist_swing_attempt,
+                hist_swing_result, hist_bb_type, hist_launch_speed,
+                hist_launch_angle, hist_spray_angle,
+                hist_pitch_mask, hist_atbat_mask) -> torch.Tensor:
+        ...
+```
+
+YAML で `batter_hist_encoder_type: my_encoder` を指定するだけで利用可能。
 
 ### 新しい Head Strategy を追加
 
@@ -574,7 +691,7 @@ class MyHeadStrategy(nn.Module):
             "swing_attempt": ...,  # (B,) logits
             "swing_result": ...,   # (B, num_swing_result) logits
             "bb_type": ...,        # (B, num_bb_type) logits
-            "regression": ...,     # (B, 3) or dict
+            "regression": ...,     # (B, D) or dict
         }
 
 HEAD_STRATEGY_REGISTRY["my_strategy"] = MyHeadStrategy
@@ -585,6 +702,7 @@ HEAD_STRATEGY_REGISTRY["my_strategy"] = MyHeadStrategy
 | 項目 | 要件 |
 |------|------|
 | Backbone | `__init__(input_dim, hidden_dims, dropout)` / `output_dim` プロパティ / `forward(x) → Tensor` |
-| HeadStrategy | `__init__(cfg, backbone_out)` / `forward(h) → dict` |
-| SeqEncoder | `BaseSeqEncoder` 継承 / `output_dim` プロパティ / `forward(seq_pitch_type, seq_cont, seq_swing_attempt, seq_swing_result, seq_mask) → Tensor` |
-| 出力 dict keys | `swing_attempt`, `swing_result`, `bb_type`, `regression` |
+| HeadStrategy | `__init__(cfg, backbone_out)` / `forward(h) → dict`（`model_scope` に応じたキーを返す） |
+| PitchSeqEncoder | `BasePitchSeqEncoder` 継承 / `output_dim` プロパティ / `forward(seq_pitch_type, seq_cont, seq_swing_attempt, seq_swing_result, seq_mask) → Tensor` |
+| BatterHistEncoder | `BaseBatterHistEncoder` 継承 / `output_dim` プロパティ / `forward(hist_pitch_type, hist_cont, ..., hist_pitch_mask, hist_atbat_mask) → Tensor` |
+| 出力 dict keys | `model_scope` に応じたサブセット: `swing_attempt`, `swing_result`, `bb_type`, `regression` |
