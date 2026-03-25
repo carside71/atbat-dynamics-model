@@ -124,9 +124,17 @@ class ModelConfig:
     detach_cascade: bool = True  # cascade 時のみ有効
 
     # Regression Head
-    regression_head_type: str = "mlp"  # "mlp" | "mdn"
+    regression_head_type: str = "mlp"  # "mlp" | "mdn" | "heatmap"
     mdn_num_components: int = 5  # mdn 時のみ有効
     num_reg_targets: int = 3  # target_reg の数（実行時に自動設定）
+
+    # Heatmap Head 設定（regression_head_type == "heatmap" 時のみ有効）
+    heatmap_grid_h: int = 64           # 2Dヒートマップの高さ (launch_angle 軸)
+    heatmap_grid_w: int = 64           # 2Dヒートマップの幅 (spray_angle 軸)
+    heatmap_num_bins: int = 64         # 1Dヒートマップのビン数
+    heatmap_value_range: list[float] = field(default_factory=lambda: [-4.0, 4.0])  # 正規化値域
+    heatmap_sigma: float = 2.0        # GTガウスの sigma（ピクセル単位）
+    heatmap_intermediate_dim: int = 256  # deconv 前の中間チャネル数
 
     # 出力クラス数（実行時に自動設定）
     num_swing_result: int = 3
@@ -173,6 +181,11 @@ class TrainConfig:
     # Physics Consistency Loss
     loss_weight_physics: float = 0.0  # 0.0 で無効（後方互換）
     physics_margin_degrees: float = 2.0  # 境界付近のマージン（度）
+
+    # Heatmap Loss 設定
+    heatmap_loss_weight_offset: float = 1.0  # オフセット損失の重み（heatmap focal loss に対する比率）
+    heatmap_focal_alpha: float = 2.0  # focal loss の alpha パラメータ
+    heatmap_focal_beta: float = 4.0   # focal loss の beta パラメータ
 
 
 def _apply_overrides(obj: Any, overrides: dict) -> None:

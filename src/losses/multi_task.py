@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from config import TrainConfig
+from config import ModelConfig, TrainConfig
 
 
 def _mdn_loss(
@@ -46,6 +46,7 @@ def compute_loss(
     loss_fn_sr: nn.Module | None = None,
     loss_fn_bt: nn.Module | None = None,
     physics_loss_fn: nn.Module | None = None,
+    model_cfg: ModelConfig | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """階層的マスク付き損失を計算する.
 
@@ -94,7 +95,14 @@ def compute_loss(
     if "regression" in outputs:
         reg_mask = batch["reg_mask"]  # (B, D)
         reg_out = outputs["regression"]
-        if isinstance(reg_out, dict):
+        if isinstance(reg_out, dict) and "heatmap_2d" in reg_out:
+            # Heatmap head
+            from losses.heatmap import compute_heatmap_loss
+
+            assert model_cfg is not None, "model_cfg is required for heatmap head loss"
+            loss_reg, hm_details = compute_heatmap_loss(reg_out, batch, model_cfg, train_cfg)
+            losses.update(hm_details)
+        elif isinstance(reg_out, dict):
             loss_reg = _mdn_loss(reg_out, batch["reg_targets"], reg_mask)
         elif reg_mask.any():
             diff = (reg_out - batch["reg_targets"]) * reg_mask

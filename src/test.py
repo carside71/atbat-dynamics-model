@@ -45,6 +45,7 @@ def collect_predictions(
     use_seq: bool = False,
     use_batter_hist: bool = False,
     save_inputs: bool = False,
+    saved_model_cfg: dict | None = None,
 ) -> dict[str, np.ndarray]:
     """全バッチの予測とラベルを収集する."""
     all_sa_prob, all_sa_true = [], []
@@ -75,7 +76,37 @@ def collect_predictions(
 
         if "regression" in outputs:
             reg_out = outputs["regression"]
-            if isinstance(reg_out, dict):
+            if isinstance(reg_out, dict) and "heatmap_2d" in reg_out:
+                # Heatmap head: ヒートマップ + オフセットからデコード
+                from models.components.heatmap_utils import decode_heatmap_1d, decode_heatmap_2d
+
+                value_range = tuple(saved_model_cfg.get("heatmap_value_range", [-4.0, 4.0]))
+                grid_h = saved_model_cfg.get("heatmap_grid_h", 64)
+                grid_w = saved_model_cfg.get("heatmap_grid_w", 64)
+                num_bins = saved_model_cfg.get("heatmap_num_bins", 64)
+
+                # 2D: launch_angle, spray_angle
+                la_sa = decode_heatmap_2d(
+                    reg_out["heatmap_2d"], reg_out["offset_2d"],
+                    value_range, grid_h, grid_w,
+                )  # (B, 2) — [launch_angle, spray_angle]
+
+                # 1D: launch_speed
+                ls = decode_heatmap_1d(
+                    reg_out["heatmap_launch_speed"], reg_out["offset_launch_speed"],
+                    value_range, num_bins,
+                )  # (B,)
+
+                # 1D: hit_distance_sc
+                hd = decode_heatmap_1d(
+                    reg_out["heatmap_hit_distance"], reg_out["offset_hit_distance"],
+                    value_range, num_bins,
+                )  # (B,)
+
+                # target_reg 順: [launch_speed, launch_angle, hit_distance_sc, spray_angle]
+                reg_pred = torch.stack([ls, la_sa[:, 0], hd, la_sa[:, 1]], dim=-1)  # (B, 4)
+                all_reg_pred.append(reg_pred.cpu().numpy())
+            elif isinstance(reg_out, dict):
                 # MDN: 混合係数で重み付けした期待値を点推定とする
                 pi = reg_out["pi"]  # (B, K)
                 mu = reg_out["mu"]  # (B, K, D)
@@ -441,7 +472,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     model = load_trained_model(model_path, model_config_path, device)
 
     # === 予測収集 ===
-    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, use_batter_hist, save_inputs=args.save_predictions)
+    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, use_batter_hist, save_inputs=args.save_predictions, saved_model_cfg=saved_model_cfg)
 
     # === 評価 ===
     results = {}

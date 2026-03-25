@@ -3,7 +3,7 @@
 
 data:
   dataset_dir: /workspace/datasets/statcast-customized-v2
-  output_dir: /workspace/outputs/regression
+  output_dir: /workspace/outputs
 
   categorical_features:
     - p_throws
@@ -43,35 +43,34 @@ data:
     - hit_distance_sc
     - spray_angle
 
-  # model_scope=regression の場合のみ有効
-  filter_swing_attempt: true     # swing_attempt==1 フィルタ
-  reg_target_filter: "all"       # "none" | "any" | "all"
-
-  # PCK 閾値（ターゲットごと、元スケール）
-  # GT±閾値以内に予測が収まるサンプルの割合を算出する
-  pck_thresholds:
-    launch_speed: [2.0, 5.0, 10.0]       # 単位: mph
-    launch_angle: [5.0, 10.0, 15.0]      # 単位: degrees
-    hit_distance_sc: [10.0, 25.0, 50.0]  # 単位: ft
-    spray_angle: [5.0, 10.0, 15.0]       # 単位: degrees
-
 model:
-  model_scope: regression
   backbone_type: dnn
   backbone_hidden: [512, 256, 128]
   head_hidden: [64]
   head_activation: relu
   dropout: 0.2
-  regression_head_type: mdn
-  mdn_num_components: 5
+  regression_head_type: heatmap
+  heatmap_grid_h: 64
+  heatmap_grid_w: 64
+  heatmap_num_bins: 64
+  heatmap_value_range: [-4.0, 4.0]
+  heatmap_sigma: 2.0
+  heatmap_intermediate_dim: 256
 
 train:
   batch_size: 4096
-  num_epochs: 50
+  num_epochs: 20
   lr: 1.0e-3
   weight_decay: 1.0e-5
-  num_workers: 8
+  num_workers: 4
   device: cuda
   seed: 42
 
-  loss_weight_regression: 1.0
+  loss_weight_swing_attempt: 1.0
+  loss_weight_swing_result: 1.0
+  loss_weight_bb_type: 1.0
+  loss_weight_regression: 0.01
+  label_smoothing: 0.1
+  heatmap_loss_weight_offset: 1.0
+  heatmap_focal_alpha: 2.0
+  heatmap_focal_beta: 4.0

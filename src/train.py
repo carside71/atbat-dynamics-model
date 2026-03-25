@@ -82,6 +82,7 @@ def evaluate(
     use_seq: bool = False,
     use_batter_hist: bool = False,
     physics_loss_fn: nn.Module | None = None,
+    model_cfg: "ModelConfig | None" = None,
 ) -> dict[str, float]:
     """検証データで評価を行い、損失とメトリクスを返す."""
     model.eval()
@@ -97,7 +98,7 @@ def evaluate(
         batch = move_batch_to_device(batch, device)
         outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
 
-        _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
+        _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn, model_cfg=model_cfg)
         for k, v in losses.items():
             total_losses[k] = total_losses.get(k, 0.0) + v
         n_batches += 1
@@ -332,7 +333,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
             optimizer.zero_grad()
             outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
-            loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
+            loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn, model_cfg=model_cfg)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -368,6 +369,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
             use_seq,
             use_batter_hist,
             physics_loss_fn,
+            model_cfg=model_cfg,
         )
 
         record = {"epoch": epoch, "lr": scheduler.get_last_lr()[0]}
