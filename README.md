@@ -166,7 +166,7 @@ python3 src/train.py --config configs/outcome/dnn.yaml
 # classification 専用モデルの学習（SA + SR + BT、回帰なし）
 python3 src/train.py --config configs/classification/dnn.yaml
 
-# regression 専用モデルの学習（swing_attempt=1 のサンプルのみ使用）
+# regression 専用モデルの学習（使用するサンプルは.yamlから指定可能）
 python3 src/train.py --config configs/regression/dnn.yaml
 
 # デフォルト設定で実行（YAML 不要）

@@ -81,6 +81,18 @@ class DataConfig:
         ]
     )
 
+    # サンプルフィルタ設定 (regression スコープ用)
+    filter_swing_attempt: bool = True   # swing_attempt==1 でフィルタするか
+    reg_target_filter: str = "none"     # "none" | "any" | "all"
+
+    # PCK 閾値（ターゲットごと、元スケール）
+    pck_thresholds: dict[str, list[float]] = field(default_factory=lambda: {
+        "launch_speed": [2.0, 5.0, 10.0],
+        "launch_angle": [5.0, 10.0, 15.0],
+        "hit_distance_sc": [10.0, 25.0, 50.0],
+        "spray_angle": [5.0, 10.0, 15.0],
+    })
+
 
 _VALID_MODEL_SCOPES = {"all", "swing_attempt", "outcome", "classification", "regression"}
 

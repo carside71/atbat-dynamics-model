@@ -62,6 +62,8 @@ model:
   head_hidden: [64]
   head_activation: relu
   dropout: 0.2
+  regression_head_type: mdn
+  mdn_num_components: 5
 
 train:
   batch_size: 4096

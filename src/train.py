@@ -200,12 +200,38 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     print(f"  Val samples: {len(val_df):,}")
 
     # === outcome スコープ: swing_attempt=1 のサンプルのみに絞り込み ===
-    if model_scope in ("outcome", "regression"):
+    if model_scope == "outcome":
         train_df = train_df[train_df["swing_attempt"] == 1].reset_index(drop=True)
         val_df = val_df[val_df["swing_attempt"] == 1].reset_index(drop=True)
         print("  Filtered to swing_attempt=1:")
         print(f"    Train samples: {len(train_df):,}")
         print(f"    Val samples: {len(val_df):,}")
+
+    # === regression スコープ: YAML設定ベースのフィルタ ===
+    if model_scope == "regression":
+        if data_cfg.filter_swing_attempt:
+            train_df = train_df[train_df["swing_attempt"] == 1].reset_index(drop=True)
+            val_df = val_df[val_df["swing_attempt"] == 1].reset_index(drop=True)
+            print("  Filtered to swing_attempt=1:")
+            print(f"    Train samples: {len(train_df):,}")
+            print(f"    Val samples: {len(val_df):,}")
+
+        if data_cfg.reg_target_filter in ("any", "all"):
+            reg_cols = data_cfg.target_reg
+            if data_cfg.reg_target_filter == "any":
+                cond = lambda df: df[reg_cols].notna().any(axis=1)
+            else:
+                cond = lambda df: df[reg_cols].notna().all(axis=1)
+            train_df = train_df[cond(train_df)].reset_index(drop=True)
+            val_df = val_df[cond(val_df)].reset_index(drop=True)
+            print(f"  Filtered by reg_target_filter={data_cfg.reg_target_filter!r}:")
+            print(f"    Train samples: {len(train_df):,}")
+            print(f"    Val samples: {len(val_df):,}")
+
+        for split_name, df in [("Train", train_df), ("Val", val_df)]:
+            print(f"  {split_name} label distribution:")
+            print(f"    swing_result: {df[data_cfg.target_cls_swing_result].value_counts().sort_index().to_dict()}")
+            print(f"    bb_type: {df[data_cfg.target_cls_bb_type].value_counts().sort_index().to_dict()}")
 
     # === 正規化パラメータを訓練データから計算 ===
     print("Computing normalization stats...")

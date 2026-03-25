@@ -60,7 +60,11 @@ def compute_loss(
         loss_fn_bt: bb_type 用の損失関数（None の場合は標準 cross_entropy）
     """
     losses = {}
-    device = next(iter(outputs.values())).device
+    first_val = next(iter(outputs.values()))
+    if isinstance(first_val, dict):
+        device = next(iter(first_val.values())).device
+    else:
+        device = first_val.device
     total = torch.tensor(0.0, device=device)
 
     # 1. swing_attempt (binary cross-entropy)
