@@ -49,7 +49,8 @@ def test_gt_heatmap_2d():
     mask = torch.ones(B, 2)
 
     gt_hm, gt_off, gt_idx, sm = generate_gt_heatmap_2d(
-        targets, mask, grid_h=64, grid_w=64, value_range=(-4.0, 4.0), sigma=2.0,
+        targets, mask, grid_h=64, grid_w=64,
+        value_range_h=(-4.0, 4.0), value_range_w=(-4.0, 4.0), sigma=2.0,
     )
 
     assert gt_hm.shape == (B, 1, 64, 64), f"Got {gt_hm.shape}"
@@ -143,7 +144,8 @@ def test_encode_decode_roundtrip_2d():
     from models.components.heatmap_utils import decode_heatmap_2d
 
     B = 4
-    value_range = (-4.0, 4.0)
+    value_range_h = (-4.0, 4.0)
+    value_range_w = (-3.0, 3.0)
     grid_h, grid_w = 64, 64
 
     # ランダムな GT 値
@@ -152,14 +154,15 @@ def test_encode_decode_roundtrip_2d():
     mask = torch.ones(B, 2)
 
     gt_hm, gt_off, gt_idx, sm = generate_gt_heatmap_2d(
-        targets, mask, grid_h, grid_w, value_range, sigma=2.0,
+        targets, mask, grid_h, grid_w,
+        value_range_h=value_range_h, value_range_w=value_range_w, sigma=2.0,
     )
 
     # GT ヒートマップとオフセットを使ってデコード
-    decoded = decode_heatmap_2d(gt_hm, gt_off, value_range, grid_h, grid_w)
+    decoded = decode_heatmap_2d(gt_hm, gt_off, value_range_h, value_range_w, grid_h, grid_w)
 
     # 元の値との誤差が 1 ビン幅以内
-    bin_size = (value_range[1] - value_range[0]) / grid_h
+    bin_size = (value_range_h[1] - value_range_h[0]) / grid_h
     error = (decoded - targets).abs()
     max_error = error.max().item()
     assert max_error < bin_size * 2, f"Max roundtrip error {max_error:.4f} > 2 * bin_size {bin_size * 2:.4f}"
@@ -203,6 +206,10 @@ def test_heatmap_loss_computation():
         heatmap_grid_h=32,
         heatmap_grid_w=32,
         heatmap_num_bins=32,
+        heatmap_norm_range_launch_speed=[-3.0, 3.0],
+        heatmap_norm_range_launch_angle=[-4.0, 4.0],
+        heatmap_norm_range_hit_distance=[-3.5, 3.5],
+        heatmap_norm_range_spray_angle=[-2.5, 2.5],
         heatmap_intermediate_dim=64,
         dropout=0.1,
     )
@@ -269,6 +276,10 @@ def test_backward_pass():
         heatmap_grid_h=32,
         heatmap_grid_w=32,
         heatmap_num_bins=32,
+        heatmap_norm_range_launch_speed=[-3.0, 3.0],
+        heatmap_norm_range_launch_angle=[-4.0, 4.0],
+        heatmap_norm_range_hit_distance=[-3.5, 3.5],
+        heatmap_norm_range_spray_angle=[-2.5, 2.5],
         heatmap_intermediate_dim=64,
         dropout=0.1,
     )

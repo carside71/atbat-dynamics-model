@@ -41,7 +41,8 @@ def nms_1d(heatmap: torch.Tensor, kernel_size: int = 3) -> torch.Tensor:
 def decode_heatmap_2d(
     heatmap: torch.Tensor,
     offset: torch.Tensor,
-    value_range: tuple[float, float],
+    value_range_h: tuple[float, float],
+    value_range_w: tuple[float, float],
     grid_h: int,
     grid_w: int,
     kernel_size: int = 3,
@@ -56,7 +57,8 @@ def decode_heatmap_2d(
     Args:
         heatmap: (B, 1, H, W)
         offset: (B, 2, H, W)  — channel 0: dy (launch_angle), channel 1: dx (spray_angle)
-        value_range: 正規化値域 (min, max)
+        value_range_h: H 軸（launch_angle）の正規化値域 (min, max)
+        value_range_w: W 軸（spray_angle）の正規化値域 (min, max)
         grid_h: グリッド高さ
         grid_w: グリッド幅
         kernel_size: NMS カーネルサイズ
@@ -75,11 +77,12 @@ def decode_heatmap_2d(
     col = max_idx % grid_w   # (B,)
 
     # ピクセル中心の正規化値
-    vmin, vmax = value_range
-    bin_h = (vmax - vmin) / grid_h
-    bin_w = (vmax - vmin) / grid_w
-    center_y = vmin + (row.float() + 0.5) * bin_h  # launch_angle
-    center_x = vmin + (col.float() + 0.5) * bin_w  # spray_angle
+    vmin_h, vmax_h = value_range_h
+    vmin_w, vmax_w = value_range_w
+    bin_h = (vmax_h - vmin_h) / grid_h
+    bin_w = (vmax_w - vmin_w) / grid_w
+    center_y = vmin_h + (row.float() + 0.5) * bin_h  # launch_angle
+    center_x = vmin_w + (col.float() + 0.5) * bin_w  # spray_angle
 
     # ピーク位置でのオフセットを取得
     batch_idx = torch.arange(B, device=heatmap.device)

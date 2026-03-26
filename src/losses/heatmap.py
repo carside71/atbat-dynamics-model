@@ -10,7 +10,8 @@ def generate_gt_heatmap_2d(
     mask: torch.Tensor,
     grid_h: int,
     grid_w: int,
-    value_range: tuple[float, float],
+    value_range_h: tuple[float, float],
+    value_range_w: tuple[float, float],
     sigma: float = 2.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """GT 値から 2D ガウスヒートマップとオフセットマップを生成する.
@@ -20,7 +21,8 @@ def generate_gt_heatmap_2d(
         mask: (B, 2) 有効フラグ
         grid_h: グリッド高さ
         grid_w: グリッド幅
-        value_range: 正規化値域 (min, max)
+        value_range_h: H 軸（launch_angle）の正規化値域 (min, max)
+        value_range_w: W 軸（spray_angle）の正規化値域 (min, max)
         sigma: ガウス分布の標準偏差（ピクセル単位）
 
     Returns:
@@ -31,9 +33,10 @@ def generate_gt_heatmap_2d(
     """
     B = targets.size(0)
     device = targets.device
-    vmin, vmax = value_range
-    bin_h = (vmax - vmin) / grid_h
-    bin_w = (vmax - vmin) / grid_w
+    vmin_h, vmax_h = value_range_h
+    vmin_w, vmax_w = value_range_w
+    bin_h = (vmax_h - vmin_h) / grid_h
+    bin_w = (vmax_w - vmin_w) / grid_w
 
     # 両次元が有効なサンプルのみ
     sample_mask = mask[:, 0] * mask[:, 1]  # (B,)
@@ -41,8 +44,8 @@ def generate_gt_heatmap_2d(
     # GT 値をピクセル座標に変換（連続値）
     # targets[:, 0] = launch_angle → row (y 軸)
     # targets[:, 1] = spray_angle → col (x 軸)
-    ct_y = (targets[:, 0] - vmin) / bin_h  # (B,) 連続ピクセル座標
-    ct_x = (targets[:, 1] - vmin) / bin_w  # (B,)
+    ct_y = (targets[:, 0] - vmin_h) / bin_h  # (B,) 連続ピクセル座標
+    ct_x = (targets[:, 1] - vmin_w) / bin_w  # (B,)
 
     # 整数ピクセル座標（中心ピクセル）
     ct_y_int = ct_y.long().clamp(0, grid_h - 1)
@@ -241,7 +244,10 @@ def compute_heatmap_loss(
     reg_mask = batch["reg_mask"]        # (B, D)
     device = reg_targets.device
 
-    value_range = tuple(model_cfg.heatmap_value_range)
+    range_la = tuple(model_cfg.heatmap_norm_range_launch_angle)
+    range_sa = tuple(model_cfg.heatmap_norm_range_spray_angle)
+    range_ls = tuple(model_cfg.heatmap_norm_range_launch_speed)
+    range_hd = tuple(model_cfg.heatmap_norm_range_hit_distance)
     sigma = model_cfg.heatmap_sigma
     alpha = train_cfg.heatmap_focal_alpha
     beta = train_cfg.heatmap_focal_beta
@@ -257,7 +263,8 @@ def compute_heatmap_loss(
     gt_hm_2d, gt_off_2d, gt_idx_2d, sm_2d = generate_gt_heatmap_2d(
         targets_2d, mask_2d,
         model_cfg.heatmap_grid_h, model_cfg.heatmap_grid_w,
-        value_range, sigma,
+        value_range_h=range_la, value_range_w=range_sa,
+        sigma=sigma,
     )
 
     loss_hm_2d = heatmap_focal_loss(outputs["heatmap_2d"], gt_hm_2d, sm_2d, alpha, beta)
@@ -270,7 +277,7 @@ def compute_heatmap_loss(
     # --- 1D: launch_speed (idx=0) ---
     gt_hm_ls, gt_off_ls, gt_idx_ls, sm_ls = generate_gt_heatmap_1d(
         reg_targets[:, 0], reg_mask[:, 0],
-        model_cfg.heatmap_num_bins, value_range, sigma,
+        model_cfg.heatmap_num_bins, range_ls, sigma,
     )
     loss_hm_ls = heatmap_focal_loss(outputs["heatmap_launch_speed"], gt_hm_ls, sm_ls, alpha, beta)
     loss_off_ls = heatmap_offset_loss(outputs["offset_launch_speed"], gt_off_ls, gt_idx_ls, sm_ls, is_2d=False)
@@ -282,7 +289,7 @@ def compute_heatmap_loss(
     # --- 1D: hit_distance_sc (idx=2) ---
     gt_hm_hd, gt_off_hd, gt_idx_hd, sm_hd = generate_gt_heatmap_1d(
         reg_targets[:, 2], reg_mask[:, 2],
-        model_cfg.heatmap_num_bins, value_range, sigma,
+        model_cfg.heatmap_num_bins, range_hd, sigma,
     )
     loss_hm_hd = heatmap_focal_loss(outputs["heatmap_hit_distance"], gt_hm_hd, sm_hd, alpha, beta)
     loss_off_hd = heatmap_offset_loss(outputs["offset_hit_distance"], gt_off_hd, gt_idx_hd, sm_hd, is_2d=False)

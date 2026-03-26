@@ -132,7 +132,16 @@ class ModelConfig:
     heatmap_grid_h: int = 64           # 2Dヒートマップの高さ (launch_angle 軸)
     heatmap_grid_w: int = 64           # 2Dヒートマップの幅 (spray_angle 軸)
     heatmap_num_bins: int = 64         # 1Dヒートマップのビン数
-    heatmap_value_range: list[float] = field(default_factory=lambda: [-4.0, 4.0])  # 正規化値域
+    # 物理値域（YAMLで指定）
+    heatmap_range_launch_speed: list[float] = field(default_factory=lambda: [40.0, 120.0])   # mph
+    heatmap_range_launch_angle: list[float] = field(default_factory=lambda: [-90.0, 90.0])   # deg
+    heatmap_range_hit_distance: list[float] = field(default_factory=lambda: [0.0, 500.0])    # ft
+    heatmap_range_spray_angle: list[float] = field(default_factory=lambda: [-45.0, 45.0])    # deg
+    # 正規化値域（学習時に自動計算、推論時は model_config.json から読み込み）
+    heatmap_norm_range_launch_speed: list[float] = field(default_factory=lambda: [-4.0, 4.0])
+    heatmap_norm_range_launch_angle: list[float] = field(default_factory=lambda: [-4.0, 4.0])
+    heatmap_norm_range_hit_distance: list[float] = field(default_factory=lambda: [-4.0, 4.0])
+    heatmap_norm_range_spray_angle: list[float] = field(default_factory=lambda: [-4.0, 4.0])
     heatmap_sigma: float = 2.0        # GTガウスの sigma（ピクセル単位）
     heatmap_intermediate_dim: int = 256  # deconv 前の中間チャネル数
 

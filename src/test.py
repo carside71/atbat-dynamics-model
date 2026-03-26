@@ -80,7 +80,10 @@ def collect_predictions(
                 # Heatmap head: ヒートマップ + オフセットからデコード
                 from models.components.heatmap_utils import decode_heatmap_1d, decode_heatmap_2d
 
-                value_range = tuple(saved_model_cfg.get("heatmap_value_range", [-4.0, 4.0]))
+                range_la = tuple(saved_model_cfg.get("heatmap_norm_range_launch_angle", [-4.0, 4.0]))
+                range_sa = tuple(saved_model_cfg.get("heatmap_norm_range_spray_angle", [-4.0, 4.0]))
+                range_ls = tuple(saved_model_cfg.get("heatmap_norm_range_launch_speed", [-4.0, 4.0]))
+                range_hd = tuple(saved_model_cfg.get("heatmap_norm_range_hit_distance", [-4.0, 4.0]))
                 grid_h = saved_model_cfg.get("heatmap_grid_h", 64)
                 grid_w = saved_model_cfg.get("heatmap_grid_w", 64)
                 num_bins = saved_model_cfg.get("heatmap_num_bins", 64)
@@ -88,19 +91,20 @@ def collect_predictions(
                 # 2D: launch_angle, spray_angle
                 la_sa = decode_heatmap_2d(
                     reg_out["heatmap_2d"], reg_out["offset_2d"],
-                    value_range, grid_h, grid_w,
+                    value_range_h=range_la, value_range_w=range_sa,
+                    grid_h=grid_h, grid_w=grid_w,
                 )  # (B, 2) — [launch_angle, spray_angle]
 
                 # 1D: launch_speed
                 ls = decode_heatmap_1d(
                     reg_out["heatmap_launch_speed"], reg_out["offset_launch_speed"],
-                    value_range, num_bins,
+                    range_ls, num_bins,
                 )  # (B,)
 
                 # 1D: hit_distance_sc
                 hd = decode_heatmap_1d(
                     reg_out["heatmap_hit_distance"], reg_out["offset_hit_distance"],
-                    value_range, num_bins,
+                    range_hd, num_bins,
                 )  # (B,)
 
                 # target_reg 順: [launch_speed, launch_angle, hit_distance_sc, spray_angle]
@@ -347,13 +351,19 @@ def main():
     )
     args = parser.parse_args()
 
+    model_dir = Path(args.model_dir) if args.model_dir else None
+
     if args.config:
         data_cfg, _, train_cfg = load_config(args.config)
+    elif model_dir and (model_dir / "config.yaml").exists():
+        print(f"Using config from model directory: {model_dir / 'config.yaml'}")
+        data_cfg, _, train_cfg = load_config(model_dir / "config.yaml")
     else:
         data_cfg = DataConfig()
         train_cfg = TrainConfig()
 
-    model_dir = Path(args.model_dir) if args.model_dir else data_cfg.output_dir
+    if model_dir is None:
+        model_dir = data_cfg.output_dir
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")
 
     # テスト出力ディレクトリを先に作成し、ログを端末とファイルの両方に出力
