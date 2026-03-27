@@ -77,7 +77,7 @@ model:
 
 train:
   batch_size: 4096
-  num_epochs: 50
+  num_epochs: 40
   lr: 1.0e-3
   weight_decay: 1.0e-5
   num_workers: 8

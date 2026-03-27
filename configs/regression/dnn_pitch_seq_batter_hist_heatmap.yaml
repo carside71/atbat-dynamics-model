@@ -73,19 +73,19 @@ model:
   batter_hist_hidden_dim: 64
   batter_hist_num_layers: 1
   regression_head_type: heatmap
-  heatmap_grid_h: 64
-  heatmap_grid_w: 64
-  heatmap_num_bins: 64
+  heatmap_grid_h: 64 #128 #64 #32
+  heatmap_grid_w: 64 #128 #64 #32
+  heatmap_num_bins: 64 #128 #64 #32
   heatmap_range_launch_speed: [20.0, 120.0]
   heatmap_range_launch_angle: [-90.0, 90.0]
   heatmap_range_hit_distance: [0.0, 500.0]
   heatmap_range_spray_angle: [-180.0, 180.0]
-  heatmap_sigma: 2.0
+  heatmap_sigma: 4.0 #8.0 #4.0 #2.0
   heatmap_intermediate_dim: 256
 
 train:
   batch_size: 4096
-  num_epochs: 50
+  num_epochs: 40
   lr: 1.0e-3
   weight_decay: 1.0e-5
   num_workers: 8
