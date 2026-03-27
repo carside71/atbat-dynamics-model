@@ -8,6 +8,7 @@
 - [export\_graph — モデルグラフの可視化](#export_graph--モデルグラフの可視化)
 - [generate\_viewer — 予測結果の可視化（Prediction Viewer）](#generate_viewer--予測結果の可視化prediction-viewer)
 - [plot\_curves — 学習曲線プロット](#plot_curves--学習曲線プロット)
+- [plot\_distribution — データ分布の可視化](#plot_distribution--データ分布の可視化)
 
 ---
 
@@ -218,3 +219,66 @@ python3 -m tools.plot_curves outputs/run1 --format pdf --dpi 300
 | `--fontsize` | `12` | フォントサイズ |
 | `--format` | `png` | 出力形式（`png` / `pdf` / `svg`） |
 | `--dpi` | `150` | 解像度 |
+
+---
+
+## plot\_distribution — データ分布の可視化
+
+データセットの連続値カラムの分布を 1D ヒストグラムおよび 2D 密度プロットで可視化します。ヒートマップヘッドの物理値域（`heatmap_range_*`）設定の参考に使用できます。
+
+```bash
+# 回帰ターゲットの 1D ヒストグラム（regression scope フィルタ付き）
+python3 -m tools.plot_distribution /workspace/datasets/statcast-customized-v2 \
+    --columns launch_speed launch_angle hit_distance_sc spray_angle \
+    --filter-swing --reg-target-filter all
+
+# 2D 密度プロット（ヒートマップ軸の分布確認）
+python3 -m tools.plot_distribution /workspace/datasets/statcast-customized-v2 \
+    --plot-2d launch_angle:spray_angle launch_speed:hit_distance_sc \
+    --filter-swing --reg-target-filter all
+
+# 投球特徴量の分布（フィルタなし）
+python3 -m tools.plot_distribution /workspace/datasets/statcast-customized-v2 \
+    --columns release_speed release_spin_rate pfx_x pfx_z plate_x plate_z
+```
+
+### フィルタリング
+
+`model_scope=regression` と同等のフィルタリングを適用できます:
+
+- `--filter-swing`: `swing_attempt==1` のサンプルのみに絞り込み
+- `--reg-target-filter all|any`: 回帰ターゲットの欠損に基づくフィルタ（`all` = 全ターゲットが非 NaN、`any` = いずれか1つ以上が非 NaN）
+- `--reg-targets`: `--reg-target-filter` の対象カラム（デフォルト: launch\_speed, launch\_angle, hit\_distance\_sc, spray\_angle）
+
+### 出力内容
+
+- **1D ヒストグラム**: `hist_{column}.{format}` — 基本統計量（mean, std, min, max）と p1/p99 パーセンタイルの縦線を表示
+- **2D 密度プロット**: `hist2d_{col_x}_{col_y}.{format}` — カラーバー付き 2D ヒストグラム
+
+### オプション
+
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| `dataset_dir`（位置引数） | （必須） | データセットディレクトリ（parquet + splits/） |
+| `--columns` | 回帰ターゲット 4 列 | 1D ヒストグラムを描画するカラム（`--plot-2d` のみ指定時はスキップ） |
+| `--plot-2d` | — | 2D 密度プロット。`col_x:col_y` 形式で複数指定可 |
+| `--split` | `train` | データ分割（`train` / `val` / `test`） |
+| `--filter-swing` | `false` | `swing_attempt==1` でフィルタ |
+| `--reg-target-filter` | `none` | 回帰ターゲット欠損フィルタ（`none` / `any` / `all`） |
+| `--reg-targets` | 4 列 | `--reg-target-filter` の対象カラム |
+| `--output-dir` | `./figs` | 出力先ディレクトリ |
+| `--format` | `png` | 出力形式（`png` / `pdf` / `svg`） |
+| `--dpi` | `150` | 解像度 |
+| `--figsize W H` | `8 6` | 画像サイズ |
+| `--bins` | `100` | ヒストグラムのビン数 |
+| `--fontsize` | `12` | フォントサイズ |
+
+### シェルスクリプト
+
+よく使うコマンドパターンを `scripts/` に用意しています:
+
+| スクリプト | 内容 |
+|---|---|
+| `scripts/plot_dist_regression_targets.sh` | 回帰ターゲット 4 列の 1D ヒストグラム（regression scope フィルタ付き） |
+| `scripts/plot_dist_regression_2d.sh` | spray\_angle:launch\_angle / launch\_speed:hit\_distance\_sc の 2D 密度プロット |
+| `scripts/plot_dist_pitch_features.sh` | 投球特徴量 6 列の 1D 分布（フィルタなし） |
