@@ -1,7 +1,22 @@
-"""ヒートマップの後処理ユーティリティ（NMS・デコード）."""
+"""ヒートマップの後処理ユーティリティ（NMS・デコード・キー生成）."""
 
 import torch
 import torch.nn.functional as F
+
+
+def make_heatmap_key(head_type: str, targets: list[str]) -> str:
+    """ヒートマップサブヘッドの出力キーを生成する.
+
+    Args:
+        head_type: "1d" or "2d"
+        targets: ターゲット名のリスト
+
+    Returns:
+        キー文字列。例: "2d_launch_angle__spray_angle", "1d_launch_speed"
+    """
+    if head_type == "2d":
+        return f"2d_{'__'.join(targets)}"
+    return f"1d_{targets[0]}"
 
 
 def nms_2d(heatmap: torch.Tensor, kernel_size: int = 3) -> torch.Tensor:

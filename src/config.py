@@ -104,6 +104,17 @@ def validate_model_scope(scope: str) -> None:
 
 
 @dataclass
+class HeatmapSubHeadConfig:
+    """個別ヒートマップサブヘッドの設定."""
+
+    type: str              # "1d" | "2d"
+    targets: list[str]     # 1d: 1個、2d: 2個のターゲット名
+    grid_h: int | None = None   # 2d のみ。None でグローバル値使用
+    grid_w: int | None = None   # 2d のみ
+    num_bins: int | None = None  # 1d のみ。None でグローバル値使用
+
+
+@dataclass
 class ModelConfig:
     # モデルスコープ: "all"=全タスク統合, "swing_attempt"=SA予測のみ, "outcome"=SR/BT/Reg予測のみ,
     # "classification"=SA/SR/BT分類のみ, "regression"=回帰のみ
@@ -145,6 +156,21 @@ class ModelConfig:
     heatmap_sigma: float = 2.0        # GTガウスの sigma（ピクセル単位）
     heatmap_intermediate_dim: int = 256  # deconv 前の中間チャネル数
 
+    # 設定可能なヒートマップヘッド構成（None = レガシーハードコード動作）
+    # YAML 例:
+    #   heatmap_heads:
+    #     - type: "2d"
+    #       targets: [launch_angle, spray_angle]
+    #     - type: "1d"
+    #       targets: [launch_speed]
+    #     - type: "1d"
+    #       targets: [hit_distance_sc]
+    heatmap_heads: list[dict] | None = None
+    # 学習時に自動設定: target_reg のターゲット名リスト
+    heatmap_target_reg: list[str] | None = None
+    # 学習時に自動設定: ターゲット名 → 正規化値域の dict
+    heatmap_norm_ranges: dict[str, list[float]] | None = None
+
     # 出力クラス数（実行時に自動設定）
     num_swing_result: int = 3
     num_bb_type: int = 4
@@ -162,6 +188,46 @@ class ModelConfig:
     batter_hist_encoder_type: str = "gru"  # "gru" | "transformer"
     batter_hist_hidden_dim: int = 64
     batter_hist_num_layers: int = 1
+
+    def get_heatmap_head_configs(self) -> list[HeatmapSubHeadConfig] | None:
+        """heatmap_heads を HeatmapSubHeadConfig のリストに変換する.
+
+        Returns:
+            None の場合はレガシーモード（ハードコード動作）。
+        """
+        if self.heatmap_heads is None:
+            return None
+        configs = [HeatmapSubHeadConfig(**h) for h in self.heatmap_heads]
+        # バリデーション
+        for hc in configs:
+            if hc.type == "2d" and len(hc.targets) != 2:
+                raise ValueError(f"2D heatmap head must have exactly 2 targets, got {hc.targets}")
+            if hc.type == "1d" and len(hc.targets) != 1:
+                raise ValueError(f"1D heatmap head must have exactly 1 target, got {hc.targets}")
+            if hc.type not in ("1d", "2d"):
+                raise ValueError(f"Invalid heatmap head type: {hc.type!r}")
+        # 重複チェック
+        all_targets = [t for hc in configs for t in hc.targets]
+        if len(all_targets) != len(set(all_targets)):
+            raise ValueError(f"Duplicate targets in heatmap_heads: {all_targets}")
+        return configs
+
+    def get_heatmap_norm_range(self, target: str) -> tuple[float, float]:
+        """指定ターゲットの正規化値域を取得する（新 dict → 旧個別フィールド fallback）."""
+        if self.heatmap_norm_ranges is not None and target in self.heatmap_norm_ranges:
+            r = self.heatmap_norm_ranges[target]
+            return (r[0], r[1])
+        # 旧個別フィールドへ fallback
+        _legacy_map = {
+            "launch_speed": self.heatmap_norm_range_launch_speed,
+            "launch_angle": self.heatmap_norm_range_launch_angle,
+            "hit_distance_sc": self.heatmap_norm_range_hit_distance,
+            "spray_angle": self.heatmap_norm_range_spray_angle,
+        }
+        if target in _legacy_map:
+            r = _legacy_map[target]
+            return (r[0], r[1])
+        raise ValueError(f"No heatmap norm range found for target: {target!r}")
 
 
 @dataclass

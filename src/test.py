@@ -76,40 +76,74 @@ def collect_predictions(
 
         if "regression" in outputs:
             reg_out = outputs["regression"]
-            if isinstance(reg_out, dict) and "heatmap_2d" in reg_out:
+            if isinstance(reg_out, dict) and any(k.startswith("heatmap_") for k in reg_out):
                 # Heatmap head: ヒートマップ + オフセットからデコード
-                from models.components.heatmap_utils import decode_heatmap_1d, decode_heatmap_2d
+                from models.components.heatmap_utils import decode_heatmap_1d, decode_heatmap_2d, make_heatmap_key
 
-                range_la = tuple(saved_model_cfg.get("heatmap_norm_range_launch_angle", [-4.0, 4.0]))
-                range_sa = tuple(saved_model_cfg.get("heatmap_norm_range_spray_angle", [-4.0, 4.0]))
-                range_ls = tuple(saved_model_cfg.get("heatmap_norm_range_launch_speed", [-4.0, 4.0]))
-                range_hd = tuple(saved_model_cfg.get("heatmap_norm_range_hit_distance", [-4.0, 4.0]))
-                grid_h = saved_model_cfg.get("heatmap_grid_h", 64)
-                grid_w = saved_model_cfg.get("heatmap_grid_w", 64)
-                num_bins = saved_model_cfg.get("heatmap_num_bins", 64)
+                heatmap_heads_raw = saved_model_cfg.get("heatmap_heads", None)
 
-                # 2D: launch_angle, spray_angle
-                la_sa = decode_heatmap_2d(
-                    reg_out["heatmap_2d"], reg_out["offset_2d"],
-                    value_range_h=range_la, value_range_w=range_sa,
-                    grid_h=grid_h, grid_w=grid_w,
-                )  # (B, 2) — [launch_angle, spray_angle]
+                if heatmap_heads_raw is None:
+                    # レガシーモード: ハードコードされた構成
+                    range_la = tuple(saved_model_cfg.get("heatmap_norm_range_launch_angle", [-4.0, 4.0]))
+                    range_sa = tuple(saved_model_cfg.get("heatmap_norm_range_spray_angle", [-4.0, 4.0]))
+                    range_ls = tuple(saved_model_cfg.get("heatmap_norm_range_launch_speed", [-4.0, 4.0]))
+                    range_hd = tuple(saved_model_cfg.get("heatmap_norm_range_hit_distance", [-4.0, 4.0]))
+                    grid_h = saved_model_cfg.get("heatmap_grid_h", 64)
+                    grid_w = saved_model_cfg.get("heatmap_grid_w", 64)
+                    num_bins = saved_model_cfg.get("heatmap_num_bins", 64)
 
-                # 1D: launch_speed
-                ls = decode_heatmap_1d(
-                    reg_out["heatmap_launch_speed"], reg_out["offset_launch_speed"],
-                    range_ls, num_bins,
-                )  # (B,)
+                    la_sa = decode_heatmap_2d(
+                        reg_out["heatmap_2d"], reg_out["offset_2d"],
+                        value_range_h=range_la, value_range_w=range_sa,
+                        grid_h=grid_h, grid_w=grid_w,
+                    )
+                    ls = decode_heatmap_1d(
+                        reg_out["heatmap_launch_speed"], reg_out["offset_launch_speed"],
+                        range_ls, num_bins,
+                    )
+                    hd = decode_heatmap_1d(
+                        reg_out["heatmap_hit_distance"], reg_out["offset_hit_distance"],
+                        range_hd, num_bins,
+                    )
+                    reg_pred = torch.stack([ls, la_sa[:, 0], hd, la_sa[:, 1]], dim=-1)
+                    all_reg_pred.append(reg_pred.cpu().numpy())
+                else:
+                    # 設定モード: heatmap_heads に基づく動的デコード
+                    target_reg = saved_model_cfg.get("heatmap_target_reg")
+                    norm_ranges = saved_model_cfg.get("heatmap_norm_ranges", {})
+                    target_index = {name: i for i, name in enumerate(target_reg)}
+                    B = next(iter(reg_out.values())).size(0)
+                    num_targets = len(target_reg)
+                    reg_pred = torch.zeros(B, num_targets, device=device)
 
-                # 1D: hit_distance_sc
-                hd = decode_heatmap_1d(
-                    reg_out["heatmap_hit_distance"], reg_out["offset_hit_distance"],
-                    range_hd, num_bins,
-                )  # (B,)
+                    for hc in heatmap_heads_raw:
+                        key = make_heatmap_key(hc["type"], hc["targets"])
+                        hm_key = f"heatmap_{key}"
+                        off_key = f"offset_{key}"
 
-                # target_reg 順: [launch_speed, launch_angle, hit_distance_sc, spray_angle]
-                reg_pred = torch.stack([ls, la_sa[:, 0], hd, la_sa[:, 1]], dim=-1)  # (B, 4)
-                all_reg_pred.append(reg_pred.cpu().numpy())
+                        if hc["type"] == "2d":
+                            t0, t1 = hc["targets"]
+                            range_h = tuple(norm_ranges[t0])
+                            range_w = tuple(norm_ranges[t1])
+                            gh = hc.get("grid_h") or saved_model_cfg.get("heatmap_grid_h", 64)
+                            gw = hc.get("grid_w") or saved_model_cfg.get("heatmap_grid_w", 64)
+                            decoded = decode_heatmap_2d(
+                                reg_out[hm_key], reg_out[off_key],
+                                value_range_h=range_h, value_range_w=range_w,
+                                grid_h=gh, grid_w=gw,
+                            )
+                            reg_pred[:, target_index[t0]] = decoded[:, 0]
+                            reg_pred[:, target_index[t1]] = decoded[:, 1]
+                        else:
+                            t = hc["targets"][0]
+                            vrange = tuple(norm_ranges[t])
+                            nb = hc.get("num_bins") or saved_model_cfg.get("heatmap_num_bins", 64)
+                            decoded = decode_heatmap_1d(
+                                reg_out[hm_key], reg_out[off_key], vrange, nb,
+                            )
+                            reg_pred[:, target_index[t]] = decoded
+
+                    all_reg_pred.append(reg_pred.cpu().numpy())
             elif isinstance(reg_out, dict):
                 # MDN: 混合係数で重み付けした期待値を点推定とする
                 pi = reg_out["pi"]  # (B, K)
