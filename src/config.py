@@ -124,9 +124,16 @@ class ModelConfig:
     embedding_dims: dict[str, tuple[int, int]] = field(default_factory=dict)
 
     # Backbone
-    backbone_type: str = "resdnn"  # "dnn" | "resdnn"
+    backbone_type: str = "resdnn"  # "dnn" | "resdnn" | "attention"
     backbone_hidden: list[int] = field(default_factory=lambda: [512, 256, 128])
     dropout: float = 0.2
+
+    # Self-Attention Backbone (backbone_type == "attention" のみ有効)
+    attn_num_heads: int = 4           # マルチヘッド注意のヘッド数
+    attn_num_layers: int = 2          # Transformer Encoder のレイヤー数
+    attn_token_dim: int = 64          # トークン次元 (d_model)
+    attn_ff_multiplier: int = 4       # FFN次元 = attn_token_dim * attn_ff_multiplier
+    attn_pool: str = "cls"            # "cls" | "mean" — プーリング方式
 
     # Head Strategy
     head_strategy: str = "independent"  # "independent" | "cascade"
