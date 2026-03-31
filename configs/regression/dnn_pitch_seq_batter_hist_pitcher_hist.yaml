@@ -1,0 +1,90 @@
+# AtBat Dynamics Model 設定ファイル (Regression + Sequence + Batter History + Pitcher History)
+# 回帰専用モデル。過去投球系列・打者履歴・投手履歴を GRU でエンコードして予測
+
+data:
+  dataset_dir: /workspace/datasets/statcast-customized-v2
+  output_dir: /workspace/outputs/regression
+
+  categorical_features:
+    - p_throws
+    - pitch_type
+    # - batter
+    - stand
+    - base_out_state
+    - count_state
+  continuous_features:
+    - release_speed
+    - release_spin_rate
+    - pfx_x
+    - pfx_z
+    - plate_x
+    - plate_z
+    - vx0
+    - vy0
+    - vz0
+    - ax
+    - ay
+    - az
+    - sz_top
+    - sz_bot
+    - plate_z_norm
+  ordinal_features:
+    - inning_clipped
+    - is_inning_top
+    - diff_score_clipped
+    - pitch_number_clipped
+
+  target_cls_swing_attempt: swing_attempt
+  target_cls_swing_result: swing_result
+  target_cls_bb_type: bb_type
+  target_reg:
+    - launch_speed
+    - launch_angle
+    - hit_distance_sc
+    - spray_angle
+
+  # model_scope=regression の場合のみ有効
+  filter_swing_attempt: true     # swing_attempt==1 フィルタ
+  reg_target_filter: "all"       # "none" | "any" | "all"
+
+  # PCK 閾値（ターゲットごと、元スケール）
+  # GT±閾値以内に予測が収まるサンプルの割合を算出する
+  pck_thresholds:
+    launch_speed: [2.0, 5.0, 10.0]       # 単位: mph
+    launch_angle: [5.0, 10.0, 15.0]      # 単位: degrees
+    hit_distance_sc: [10.0, 25.0, 50.0]  # 単位: ft
+    spray_angle: [5.0, 10.0, 15.0]       # 単位: degrees
+
+model:
+  model_scope: regression
+  backbone_type: dnn
+  backbone_hidden: [512, 256, 128]
+  head_hidden: [64]
+  head_activation: relu
+  dropout: 0.2
+  pitch_seq_max_len: 10
+  pitch_seq_encoder_type: gru
+  pitch_seq_hidden_dim: 64
+  pitch_seq_num_layers: 1
+  pitch_seq_bidirectional: false
+  batter_hist_max_atbats: 50
+  batter_hist_max_pitches: 10
+  batter_hist_encoder_type: gru
+  batter_hist_hidden_dim: 64
+  batter_hist_num_layers: 1
+  pitcher_hist_max_atbats: 50
+  pitcher_hist_max_pitches: 10
+  pitcher_hist_encoder_type: gru
+  pitcher_hist_hidden_dim: 64
+  pitcher_hist_num_layers: 1
+
+train:
+  batch_size: 4096
+  num_epochs: 40
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  num_workers: 8
+  device: cuda
+  seed: 42
+
+  loss_weight_regression: 1.0

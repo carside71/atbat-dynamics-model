@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-from tools.build_dataset.columns import BATTER_HIST_NUM_ATBATS, TRAIN_END, VALID_END
+from tools.build_dataset.columns import BATTER_HIST_NUM_ATBATS, PITCHER_HIST_NUM_ATBATS, TRAIN_END, VALID_END
 
 
 @dataclass
@@ -19,6 +19,7 @@ class SplitsReport:
     split_sizes: dict[str, int] = field(default_factory=dict)
     split_date_ranges: dict[str, tuple[str, str]] = field(default_factory=dict)
     history_stats: dict[str, float] = field(default_factory=dict)
+    pitcher_history_stats: dict[str, float] = field(default_factory=dict)
 
     def display(self) -> None:
 
@@ -36,6 +37,12 @@ class SplitsReport:
             print(f"    エントリ数: {self.history_stats['entries']:,.0f}")
             print(f"    平均履歴長: {self.history_stats['mean_len']:.1f}")
             print(f"    最大履歴長: {self.history_stats['max_len']:.0f}")
+
+        if self.pitcher_history_stats:
+            print("\n  投手履歴:")
+            print(f"    エントリ数: {self.pitcher_history_stats['entries']:,.0f}")
+            print(f"    平均履歴長: {self.pitcher_history_stats['mean_len']:.1f}")
+            print(f"    最大履歴長: {self.pitcher_history_stats['max_len']:.0f}")
 
 
 def _temporal_split(
@@ -104,6 +111,46 @@ def _build_batter_history(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
 
     batter_game_history = pd.DataFrame(history_records)
     return batter_game_history, atbat_row_indices
+
+
+def _build_pitcher_history(df: pd.DataFrame) -> pd.DataFrame:
+    """投手履歴ルックアップテーブルを構築する.
+
+    Returns:
+        pitcher_game_history
+    """
+    N = PITCHER_HIST_NUM_ATBATS
+
+    # (pitcher, game_pk) → at_bat_ids
+    atbat_info = df.groupby("at_bat_id").agg(pitcher=("pitcher", "first"), game_pk=("game_pk", "first")).reset_index()
+
+    # pitcher ごとに game_pk 順で打席を蓄積
+    pitcher_games = (
+        atbat_info.sort_values(["pitcher", "game_pk", "at_bat_id"])
+        .groupby(["pitcher", "game_pk"])["at_bat_id"]
+        .apply(list)
+        .reset_index()
+    )
+
+    history_records = []
+    for pitcher, group in tqdm(pitcher_games.groupby("pitcher"), desc="Building pitcher history", leave=False):
+        past_ids: list[int] = []
+        for _, row in group.iterrows():
+            game_pk = row["game_pk"]
+            current_ids = row["at_bat_id"]
+            # 現在の試合の打席は含めず、過去の打席のみ
+            hist = past_ids[-N:] if len(past_ids) > N else past_ids[:]
+            history_records.append(
+                {
+                    "pitcher": pitcher,
+                    "game_pk": game_pk,
+                    "hist_at_bat_ids": hist,
+                    "hist_len": len(hist),
+                }
+            )
+            past_ids.extend(current_ids)
+
+    return pd.DataFrame(history_records)
 
 
 def _build_metadata(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
@@ -182,6 +229,16 @@ def run(
         "max_len": float(batter_game_history["hist_len"].max()),
     }
 
+    # 投手履歴構築・保存
+    pitcher_game_history = _build_pitcher_history(df)
+    pitcher_game_history.to_parquet(output_dir / "pitcher_game_history.parquet", index=False)
+
+    report.pitcher_history_stats = {
+        "entries": len(pitcher_game_history),
+        "mean_len": float(pitcher_game_history["hist_len"].mean()),
+        "max_len": float(pitcher_game_history["hist_len"].max()),
+    }
+
     # メタデータ構築・保存
     metadata, player_names = _build_metadata(df)
     metadata.to_parquet(output_dir / "atbat_metadata.parquet", index=False)
@@ -193,7 +250,7 @@ def run(
     save_stats(stats_tables, output_dir)
 
     # メタデータ用カラムを落とし、データ保存
-    meta_only_cols = ["pitcher", "home_team", "away_team", "at_bat_number"]
+    meta_only_cols = ["home_team", "away_team", "at_bat_number"]
     drop_cols = [c for c in meta_only_cols if c in df.columns]
     df_save = df.drop(columns=drop_cols)
 

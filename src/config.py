@@ -68,6 +68,10 @@ class DataConfig:
     def batter_history_dir(self) -> Path:
         return self.dataset_dir
 
+    @property
+    def pitcher_history_dir(self) -> Path:
+        return self.dataset_dir
+
     # ターゲット
     target_cls_swing_attempt: str = "swing_attempt"
     target_cls_swing_result: str = "swing_result"
@@ -195,6 +199,13 @@ class ModelConfig:
     batter_hist_encoder_type: str = "gru"  # "gru" | "transformer"
     batter_hist_hidden_dim: int = 64
     batter_hist_num_layers: int = 1
+
+    # 投手履歴エンコーダ（0 で無効）
+    pitcher_hist_max_atbats: int = 0
+    pitcher_hist_max_pitches: int = 10
+    pitcher_hist_encoder_type: str = "gru"  # "gru" | "transformer"
+    pitcher_hist_hidden_dim: int = 64
+    pitcher_hist_num_layers: int = 1
 
     def get_heatmap_head_configs(self) -> list[HeatmapSubHeadConfig] | None:
         """heatmap_heads を HeatmapSubHeadConfig のリストに変換する.

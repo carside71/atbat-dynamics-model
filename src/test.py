@@ -44,6 +44,7 @@ def collect_predictions(
     device: torch.device,
     use_seq: bool = False,
     use_batter_hist: bool = False,
+    use_pitcher_hist: bool = False,
     save_inputs: bool = False,
     saved_model_cfg: dict | None = None,
 ) -> dict[str, np.ndarray]:
@@ -61,7 +62,7 @@ def collect_predictions(
 
     for batch in tqdm(loader, desc="Predicting"):
         batch = move_batch_to_device(batch, device)
-        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist, use_pitcher_hist)
 
         if "swing_attempt" in outputs:
             all_sa_prob.append(outputs["swing_attempt"].sigmoid().cpu().numpy())
@@ -512,7 +513,10 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     use_batter_hist = saved_model_cfg.get("batter_hist_max_atbats", 0) > 0
     batter_hist_max_atbats = saved_model_cfg.get("batter_hist_max_atbats", 0)
     batter_hist_max_pitches = saved_model_cfg.get("batter_hist_max_pitches", 10)
-    need_at_bat_id = use_seq or use_batter_hist
+    use_pitcher_hist = saved_model_cfg.get("pitcher_hist_max_atbats", 0) > 0
+    pitcher_hist_max_atbats = saved_model_cfg.get("pitcher_hist_max_atbats", 0)
+    pitcher_hist_max_pitches = saved_model_cfg.get("pitcher_hist_max_pitches", 10)
+    need_at_bat_id = use_seq or use_batter_hist or use_pitcher_hist
 
     print(f"Model scope: {model_scope}")
 
@@ -575,6 +579,8 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
         max_seq_len=max_seq_len,
         batter_hist_max_atbats=batter_hist_max_atbats,
         batter_hist_max_pitches=batter_hist_max_pitches,
+        pitcher_hist_max_atbats=pitcher_hist_max_atbats,
+        pitcher_hist_max_pitches=pitcher_hist_max_pitches,
     )
     del test_df
 
@@ -592,7 +598,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     model = load_trained_model(model_path, model_config_path, device)
 
     # === 予測収集 ===
-    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, use_batter_hist, save_inputs=args.save_predictions, saved_model_cfg=saved_model_cfg)
+    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, use_batter_hist, use_pitcher_hist, save_inputs=args.save_predictions, saved_model_cfg=saved_model_cfg)
 
     # === 評価 ===
     results = {}
