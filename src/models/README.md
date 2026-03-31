@@ -17,6 +17,7 @@ models/
     heatmap_utils.py   # NMS, decode（ヒートマップ後処理）
     pitch_seq_encoders.py    # GRUPitchSeqEncoder, TransformerPitchSeqEncoder（レジストリ登録）
     batter_hist_encoders.py  # GRUBatterHistEncoder, TransformerBatterHistEncoder（レジストリ登録）
+    pitcher_hist_encoders.py # GRUPitcherHistEncoder, TransformerPitcherHistEncoder（レジストリ登録）
     head_strategies.py # IndependentHeadStrategy, CascadeHeadStrategy
 ```
 
@@ -34,10 +35,10 @@ models/
   <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">カテゴリカル特徴量</td>
   <td rowspan="3" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
   <td rowspan="3" style="background:#e3f2fd; border:2px solid #42a5f5; border-radius:8px; padding:8px 14px; text-align:center;"><b>Embedding</b></td>
-  <td rowspan="5" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0 6px;">→ <i>concat</i> →</td>
-  <td rowspan="5" style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>Backbone</b><br><sub>DNN / ResDNN / Attention</sub></td>
-  <td rowspan="5" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
-  <td rowspan="5" style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:10px 16px; text-align:center;"><b>HeadStrategy</b><br><sub>Independent / Cascade</sub></td>
+  <td rowspan="6" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0 6px;">→ <i>concat</i> →</td>
+  <td rowspan="6" style="background:#e8f5e9; border:2px solid #66bb6a; border-radius:8px; padding:8px 14px; text-align:center;"><b>Backbone</b><br><sub>DNN / ResDNN / Attention</sub></td>
+  <td rowspan="6" style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
+  <td rowspan="6" style="background:#fff3e0; border:2px solid #ffa726; border-radius:8px; padding:10px 16px; text-align:center;"><b>HeadStrategy</b><br><sub>Independent / Cascade</sub></td>
 </tr>
 <tr><td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">連続値特徴量</td></tr>
 <tr><td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">順序特徴量</td></tr>
@@ -50,6 +51,11 @@ models/
   <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">打者履歴 <i>(opt)</i></td>
   <td style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
   <td style="background:#fce4ec; border:2px solid #ef5350; border-radius:8px; padding:10px 16px; text-align:center;"><b>BatterHistEncoder</b><br><sub>GRU / Transformer</sub></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:2px solid #78909c; border-radius:8px; padding:6px 12px; text-align:center;">投手履歴 <i>(opt)</i></td>
+  <td style="border:none; text-align:center; font-size:20px; color:#546e7a; padding:0 6px;">→</td>
+  <td style="background:#e0f2f1; border:2px solid #26a69a; border-radius:8px; padding:10px 16px; text-align:center;"><b>PitcherHistEncoder</b><br><sub>GRU / Transformer</sub></td>
 </tr>
 </table>
 </div>
@@ -646,6 +652,54 @@ CenterNet スタイルのヒートマップベース回帰。
 
 ---
 
+### 7. PitcherHistEncoder (`components/pitcher_hist_encoders.py`)
+
+`pitcher_hist_max_atbats > 0` のとき有効化。YAML の `pitcher_hist_encoder_type` で選択。
+
+投手の直近 N 打席（対戦打席）の Statcast 全投球データをエンコードする。BatterHistEncoder と同一の 2 階層アーキテクチャを持つが、打者ではなく投手の過去対戦履歴を集約する。
+
+<div align="center">
+<table style="border-collapse: separate; border-spacing: 4px 3px;">
+<tr>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; padding:4px 0;"><b>投手の過去 N 打席 × 各最大 P 球</b></td>
+</tr>
+<tr>
+  <td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">pitcher_hist_pitch_type (B,N,P) → <i>Emb 共有</i></td>
+  <td rowspan="4" style="border:none; text-align:center; color:#546e7a; font-size:13px; padding:0 6px;">→<br><i>concat</i><br>→</td>
+  <td rowspan="4" style="background:#e0f2f1; border:2px solid #26a69a; border-radius:8px; padding:10px 16px; text-align:center; vertical-align:middle;"><b>Inner GRU</b><br><sub>(B*N, P, D) → h_n[-1]<br>→ (B*N, D_inner)</sub></td>
+</tr>
+<tr><td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">pitcher_hist_cont (B,N,P,15)</td></tr>
+<tr><td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">pitcher_hist_swing_attempt (B,N,P)</td></tr>
+<tr><td style="background:#eceff1; border:1px solid #90a4ae; border-radius:6px; padding:3px 10px; text-align:right; font-size:13px; text-align:left;">pitcher_hist_swing_result (B,N,P) → <i>Emb 共有</i></td></tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ reshape → (B, N, D_inner)</td>
+</tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
+    <span style="background:#fafafa; border:2px dashed #9e9e9e; border-radius:8px; padding:6px 12px; text-align:center; font-size:13px; display:inline-block; padding:6px 14px;"><b>concat</b>: + bb_type_emb (4) + launch_speed (1) + launch_angle (1) + spray_angle (1)</span>
+  </td>
+</tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; color:#546e7a; font-size:14px; padding:4px 0;">↓ (B, N, D_inner + 7)</td>
+</tr>
+<tr>
+  <td colspan="3" style="border:none; text-align:center; padding:2px 0;">
+    <span style="background:#e0f2f1; border:2px solid #26a69a; border-radius:8px; padding:10px 16px; text-align:center; display:inline-block; padding:8px 20px;"><b>Outer Encoder</b> (GRU / Transformer) → <b>(B, D_pitcher_hist_out)</b></span>
+  </td>
+</tr>
+</table>
+</div>
+
+- **Inner GRU**: 各打席の投球列を 1 本の打席ベクトルに圧縮（全サブクラス共通）
+- **Outer Encoder**: N 打席分の打席ベクトル列を処理して投手の傾向ベクトルに圧縮
+  - `gru`: Outer GRU で最終隠れ状態を出力
+  - `transformer`: Linear 射影 → TransformerEncoder → マスク付き平均プーリング
+- `pitch_type` / `swing_result` の Embedding は PitchSeqEncoder / BatterHistEncoder と **重みを共有**（存在する場合）
+- 投球がない打席・履歴がない投手はゼロベクトル
+- BatterHistEncoder と独立に有効化可能（両方同時に有効化も可）
+
+---
+
 ## YAML 設定
 
 ### モデル設定フィールド一覧
@@ -687,6 +741,11 @@ CenterNet スタイルのヒートマップベース回帰。
 | `batter_hist_encoder_type` | `"gru"` | `"gru"`, `"transformer"` | 打者履歴エンコーダの種類 |
 | `batter_hist_hidden_dim` | `64` | — | 打者履歴エンコーダの隠れ次元 |
 | `batter_hist_num_layers` | `1` | — | Outer エンコーダの層数 |
+| `pitcher_hist_max_atbats` | `0` | — | 0: 無効、>0: 投手履歴エンコーダ有効 |
+| `pitcher_hist_max_pitches` | `10` | — | 各打席の最大投球数 |
+| `pitcher_hist_encoder_type` | `"gru"` | `"gru"`, `"transformer"` | 投手履歴エンコーダの種類 |
+| `pitcher_hist_hidden_dim` | `64` | — | 投手履歴エンコーダの隠れ次元 |
+| `pitcher_hist_num_layers` | `1` | — | Outer エンコーダの層数 |
 
 ### 設定例
 
@@ -874,6 +933,31 @@ model:
   batter_hist_num_layers: 1
 ```
 
+#### ResBlock DNN + GRU 投球シーケンス + 打者履歴 + 投手履歴
+
+```yaml
+model:
+  backbone_type: resdnn
+  backbone_hidden: [512, 512, 256, 256, 128]
+  head_hidden: [64]
+  dropout: 0.2
+  pitch_seq_max_len: 10
+  pitch_seq_encoder_type: gru
+  pitch_seq_hidden_dim: 64
+  pitch_seq_num_layers: 1
+  pitch_seq_bidirectional: false
+  batter_hist_max_atbats: 50
+  batter_hist_max_pitches: 10
+  batter_hist_encoder_type: gru
+  batter_hist_hidden_dim: 64
+  batter_hist_num_layers: 1
+  pitcher_hist_max_atbats: 50
+  pitcher_hist_max_pitches: 10
+  pitcher_hist_encoder_type: gru
+  pitcher_hist_hidden_dim: 64
+  pitcher_hist_num_layers: 1
+```
+
 #### swing_attempt 専用モデル
 
 ```yaml
@@ -1027,6 +1111,31 @@ class MyBatterHistEncoder(BaseBatterHistEncoder):
 
 YAML で `batter_hist_encoder_type: my_encoder` を指定するだけで利用可能。
 
+### 新しい PitcherHistEncoder を追加
+
+`components/pitcher_hist_encoders.py` にクラスを追加し、レジストリに登録する。
+
+```python
+@register_pitcher_hist_encoder("my_encoder")
+class MyPitcherHistEncoder(BasePitcherHistEncoder):
+    def __init__(self, cfg, num_cont, seq_pitch_type_embed, seq_swing_result_embed):
+        super().__init__(cfg, num_cont, seq_pitch_type_embed, seq_swing_result_embed)
+        ...
+        self._output_dim = ...
+
+    @property
+    def output_dim(self) -> int:
+        return self._output_dim
+
+    def forward(self, hist_pitch_type, hist_cont, hist_swing_attempt,
+                hist_swing_result, hist_bb_type, hist_launch_speed,
+                hist_launch_angle, hist_spray_angle,
+                hist_pitch_mask, hist_atbat_mask) -> torch.Tensor:
+        ...
+```
+
+YAML で `pitcher_hist_encoder_type: my_encoder` を指定するだけで利用可能。
+
 ### 新しい Head Strategy を追加
 
 `components/head_strategies.py` に追加し、`HEAD_STRATEGY_REGISTRY` に登録する。
@@ -1055,4 +1164,5 @@ HEAD_STRATEGY_REGISTRY["my_strategy"] = MyHeadStrategy
 | HeadStrategy | `__init__(cfg, backbone_out)` / `forward(h) → dict`（`model_scope` に応じたキーを返す） |
 | PitchSeqEncoder | `BasePitchSeqEncoder` 継承 / `output_dim` プロパティ / `forward(seq_pitch_type, seq_cont, seq_swing_attempt, seq_swing_result, seq_mask) → Tensor` |
 | BatterHistEncoder | `BaseBatterHistEncoder` 継承 / `output_dim` プロパティ / `forward(hist_pitch_type, hist_cont, ..., hist_pitch_mask, hist_atbat_mask) → Tensor` |
+| PitcherHistEncoder | `BasePitcherHistEncoder` 継承 / `output_dim` プロパティ / `forward(hist_pitch_type, hist_cont, ..., hist_pitch_mask, hist_atbat_mask) → Tensor` |
 | 出力 dict keys | `model_scope` に応じたサブセット: `swing_attempt`, `swing_result`, `bb_type`, `regression` |

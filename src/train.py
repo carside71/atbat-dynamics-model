@@ -82,6 +82,7 @@ def evaluate(
     loss_fn_bt: nn.Module | None = None,
     use_seq: bool = False,
     use_batter_hist: bool = False,
+    use_pitcher_hist: bool = False,
     physics_loss_fn: nn.Module | None = None,
     model_cfg: "ModelConfig | None" = None,
 ) -> dict[str, float]:
@@ -97,7 +98,7 @@ def evaluate(
 
     for batch in loader:
         batch = move_batch_to_device(batch, device)
-        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist, use_pitcher_hist)
 
         _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn, model_cfg=model_cfg)
         for k, v in losses.items():
@@ -188,7 +189,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
     use_seq = model_cfg.pitch_seq_max_len > 0
     use_batter_hist = model_cfg.batter_hist_max_atbats > 0
-    need_at_bat_id = use_seq or use_batter_hist
+    use_pitcher_hist = model_cfg.pitcher_hist_max_atbats > 0
+    need_at_bat_id = use_seq or use_batter_hist or use_pitcher_hist
 
     if need_at_bat_id:
         train_df = all_df[all_df["at_bat_id"].isin(train_ids)].reset_index(drop=True)
@@ -289,6 +291,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         max_seq_len=model_cfg.pitch_seq_max_len,
         batter_hist_max_atbats=model_cfg.batter_hist_max_atbats,
         batter_hist_max_pitches=model_cfg.batter_hist_max_pitches,
+        pitcher_hist_max_atbats=model_cfg.pitcher_hist_max_atbats,
+        pitcher_hist_max_pitches=model_cfg.pitcher_hist_max_pitches,
     )
     train_ds = create_dataset(train_df, data_cfg, norm_stats, reg_norm_stats, **ds_kwargs)
     val_ds = create_dataset(val_df, data_cfg, norm_stats, reg_norm_stats, **ds_kwargs)
@@ -361,7 +365,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
             batch = move_batch_to_device(batch, device)
 
             optimizer.zero_grad()
-            outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+            outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist, use_pitcher_hist)
             loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn, model_cfg=model_cfg)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -397,6 +401,7 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
             loss_fn_bt,
             use_seq,
             use_batter_hist,
+            use_pitcher_hist,
             physics_loss_fn,
             model_cfg=model_cfg,
         )
