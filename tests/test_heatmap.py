@@ -308,6 +308,246 @@ def test_backward_pass():
     print("PASS: test_backward_pass")
 
 
+def test_heatmap_head_configurable_mixed():
+    """設定モード: 2D+1D 混合構成で正しい shape・キーが返ることを確認."""
+    from config import ModelConfig
+    from models.components.heatmap_head import HeatmapHead
+
+    cfg = ModelConfig(
+        regression_head_type="heatmap",
+        heatmap_grid_h=32,
+        heatmap_grid_w=32,
+        heatmap_num_bins=32,
+        heatmap_intermediate_dim=64,
+        dropout=0.1,
+        heatmap_heads=[
+            {"type": "2d", "targets": ["launch_angle", "spray_angle"]},
+            {"type": "1d", "targets": ["launch_speed"]},
+            {"type": "1d", "targets": ["hit_distance_sc"]},
+        ],
+    )
+    head = HeatmapHead(in_dim=64, cfg=cfg)
+
+    B = 4
+    x = torch.randn(B, 64)
+    out = head(x)
+
+    assert "heatmap_2d_launch_angle__spray_angle" in out
+    assert "offset_2d_launch_angle__spray_angle" in out
+    assert "heatmap_1d_launch_speed" in out
+    assert "offset_1d_launch_speed" in out
+    assert "heatmap_1d_hit_distance_sc" in out
+    assert "offset_1d_hit_distance_sc" in out
+
+    assert out["heatmap_2d_launch_angle__spray_angle"].shape == (B, 1, 32, 32)
+    assert out["offset_2d_launch_angle__spray_angle"].shape == (B, 2, 32, 32)
+    assert out["heatmap_1d_launch_speed"].shape == (B, 1, 32)
+    assert out["offset_1d_launch_speed"].shape == (B, 1, 32)
+    assert out["heatmap_1d_hit_distance_sc"].shape == (B, 1, 32)
+    assert out["offset_1d_hit_distance_sc"].shape == (B, 1, 32)
+
+    print("PASS: test_heatmap_head_configurable_mixed")
+
+
+def test_heatmap_head_all_1d():
+    """設定モード: 全ターゲットを 1D で予測する構成を確認."""
+    from config import ModelConfig
+    from models.components.heatmap_head import HeatmapHead
+
+    cfg = ModelConfig(
+        regression_head_type="heatmap",
+        heatmap_num_bins=32,
+        heatmap_intermediate_dim=64,
+        dropout=0.1,
+        heatmap_heads=[
+            {"type": "1d", "targets": ["launch_speed"]},
+            {"type": "1d", "targets": ["launch_angle"]},
+            {"type": "1d", "targets": ["hit_distance_sc"]},
+            {"type": "1d", "targets": ["spray_angle"]},
+        ],
+    )
+    head = HeatmapHead(in_dim=64, cfg=cfg)
+
+    B = 4
+    x = torch.randn(B, 64)
+    out = head(x)
+
+    # 2D キーが存在しないこと
+    assert not any(k.startswith("heatmap_2d") for k in out), f"Unexpected 2D keys: {list(out.keys())}"
+
+    # 4 つの 1D ヘッドが存在すること
+    for target in ["launch_speed", "launch_angle", "hit_distance_sc", "spray_angle"]:
+        assert f"heatmap_1d_{target}" in out, f"Missing heatmap_1d_{target}"
+        assert f"offset_1d_{target}" in out, f"Missing offset_1d_{target}"
+        assert out[f"heatmap_1d_{target}"].shape == (B, 1, 32)
+        assert out[f"offset_1d_{target}"].shape == (B, 1, 32)
+
+    print("PASS: test_heatmap_head_all_1d")
+
+
+def test_heatmap_loss_configurable():
+    """設定モードでの損失計算が正常に動作することを確認."""
+    from config import ModelConfig, TrainConfig
+    from losses.heatmap import compute_heatmap_loss
+    from models.components.heatmap_head import HeatmapHead
+
+    cfg = ModelConfig(
+        regression_head_type="heatmap",
+        heatmap_grid_h=32,
+        heatmap_grid_w=32,
+        heatmap_num_bins=32,
+        heatmap_norm_range_launch_speed=[-3.0, 3.0],
+        heatmap_norm_range_launch_angle=[-4.0, 4.0],
+        heatmap_norm_range_hit_distance=[-3.5, 3.5],
+        heatmap_norm_range_spray_angle=[-2.5, 2.5],
+        heatmap_intermediate_dim=64,
+        dropout=0.1,
+        heatmap_heads=[
+            {"type": "2d", "targets": ["launch_angle", "spray_angle"]},
+            {"type": "1d", "targets": ["launch_speed"]},
+            {"type": "1d", "targets": ["hit_distance_sc"]},
+        ],
+        heatmap_target_reg=["launch_speed", "launch_angle", "hit_distance_sc", "spray_angle"],
+        heatmap_norm_ranges={
+            "launch_speed": [-3.0, 3.0],
+            "launch_angle": [-4.0, 4.0],
+            "hit_distance_sc": [-3.5, 3.5],
+            "spray_angle": [-2.5, 2.5],
+        },
+    )
+    train_cfg = TrainConfig()
+
+    head = HeatmapHead(in_dim=64, cfg=cfg)
+
+    B = 8
+    x = torch.randn(B, 64)
+    outputs = head(x)
+
+    batch = {
+        "reg_targets": torch.randn(B, 4),
+        "reg_mask": torch.ones(B, 4),
+    }
+
+    loss, details = compute_heatmap_loss(outputs, batch, cfg, train_cfg)
+
+    assert loss.ndim == 0, "Loss should be scalar"
+    assert not torch.isnan(loss), "Loss should not be NaN"
+    assert not torch.isinf(loss), "Loss should not be Inf"
+    assert loss.requires_grad, "Loss should require grad"
+
+    # 設定モードのキー形式を確認
+    expected_keys = {
+        "hm_2d_launch_angle__spray_angle", "off_2d_launch_angle__spray_angle",
+        "hm_1d_launch_speed", "off_1d_launch_speed",
+        "hm_1d_hit_distance_sc", "off_1d_hit_distance_sc",
+    }
+    assert expected_keys.issubset(details.keys()), f"Missing keys: {expected_keys - details.keys()}"
+
+    print(f"PASS: test_heatmap_loss_configurable (loss={loss.item():.4f})")
+
+
+def test_heatmap_loss_all_1d():
+    """全ターゲット 1D 構成での損失計算を確認."""
+    from config import ModelConfig, TrainConfig
+    from losses.heatmap import compute_heatmap_loss
+    from models.components.heatmap_head import HeatmapHead
+
+    cfg = ModelConfig(
+        regression_head_type="heatmap",
+        heatmap_num_bins=32,
+        heatmap_intermediate_dim=64,
+        dropout=0.1,
+        heatmap_heads=[
+            {"type": "1d", "targets": ["launch_speed"]},
+            {"type": "1d", "targets": ["launch_angle"]},
+            {"type": "1d", "targets": ["hit_distance_sc"]},
+            {"type": "1d", "targets": ["spray_angle"]},
+        ],
+        heatmap_target_reg=["launch_speed", "launch_angle", "hit_distance_sc", "spray_angle"],
+        heatmap_norm_ranges={
+            "launch_speed": [-3.0, 3.0],
+            "launch_angle": [-4.0, 4.0],
+            "hit_distance_sc": [-3.5, 3.5],
+            "spray_angle": [-2.5, 2.5],
+        },
+    )
+    train_cfg = TrainConfig()
+    head = HeatmapHead(in_dim=64, cfg=cfg)
+
+    B = 8
+    x = torch.randn(B, 64)
+    outputs = head(x)
+
+    batch = {
+        "reg_targets": torch.randn(B, 4),
+        "reg_mask": torch.ones(B, 4),
+    }
+
+    loss, details = compute_heatmap_loss(outputs, batch, cfg, train_cfg)
+
+    assert loss.ndim == 0, "Loss should be scalar"
+    assert not torch.isnan(loss), "Loss should not be NaN"
+    assert loss.requires_grad, "Loss should require grad"
+
+    # 2D キーが存在しないこと
+    assert not any(k.startswith("hm_2d") for k in details), f"Unexpected 2D keys in details: {list(details.keys())}"
+
+    # 4 つの 1D ヘッドの損失が存在すること
+    for target in ["launch_speed", "launch_angle", "hit_distance_sc", "spray_angle"]:
+        assert f"hm_1d_{target}" in details, f"Missing hm_1d_{target}"
+        assert f"off_1d_{target}" in details, f"Missing off_1d_{target}"
+
+    print(f"PASS: test_heatmap_loss_all_1d (loss={loss.item():.4f})")
+
+
+def test_backward_pass_configurable():
+    """設定モードでの勾配伝播を確認."""
+    from config import ModelConfig, TrainConfig
+    from losses.heatmap import compute_heatmap_loss
+    from models.components.heatmap_head import HeatmapHead
+
+    cfg = ModelConfig(
+        regression_head_type="heatmap",
+        heatmap_num_bins=32,
+        heatmap_intermediate_dim=64,
+        dropout=0.1,
+        heatmap_heads=[
+            {"type": "1d", "targets": ["launch_speed"]},
+            {"type": "1d", "targets": ["launch_angle"]},
+            {"type": "1d", "targets": ["hit_distance_sc"]},
+            {"type": "1d", "targets": ["spray_angle"]},
+        ],
+        heatmap_target_reg=["launch_speed", "launch_angle", "hit_distance_sc", "spray_angle"],
+        heatmap_norm_ranges={
+            "launch_speed": [-3.0, 3.0],
+            "launch_angle": [-4.0, 4.0],
+            "hit_distance_sc": [-3.5, 3.5],
+            "spray_angle": [-2.5, 2.5],
+        },
+    )
+    train_cfg = TrainConfig()
+    head = HeatmapHead(in_dim=64, cfg=cfg)
+
+    B = 4
+    x = torch.randn(B, 64, requires_grad=True)
+    outputs = head(x)
+
+    batch = {
+        "reg_targets": torch.randn(B, 4),
+        "reg_mask": torch.ones(B, 4),
+    }
+
+    loss, _ = compute_heatmap_loss(outputs, batch, cfg, train_cfg)
+    loss.backward()
+
+    for name, param in head.named_parameters():
+        if param.requires_grad:
+            assert param.grad is not None, f"No grad for {name}"
+            assert not torch.isnan(param.grad).any(), f"NaN grad for {name}"
+
+    print("PASS: test_backward_pass_configurable")
+
+
 if __name__ == "__main__":
     test_nms_2d()
     test_nms_1d()
@@ -319,4 +559,10 @@ if __name__ == "__main__":
     test_heatmap_loss_computation()
     test_head_strategy_integration()
     test_backward_pass()
+    # 設定モードのテスト
+    test_heatmap_head_configurable_mixed()
+    test_heatmap_head_all_1d()
+    test_heatmap_loss_configurable()
+    test_heatmap_loss_all_1d()
+    test_backward_pass_configurable()
     print("\nAll tests passed!")

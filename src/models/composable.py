@@ -43,7 +43,7 @@ class ComposableModel(nn.Module):
 
         # 4. Backbone
         backbone_cls = BACKBONE_REGISTRY[cfg.backbone_type]
-        self.backbone = backbone_cls(feat_dim, cfg.backbone_hidden, cfg.dropout)
+        self.backbone = backbone_cls(feat_dim, cfg.backbone_hidden, cfg.dropout, cfg=cfg)
 
         # 5. Head Strategy
         strategy_cls = HEAD_STRATEGY_REGISTRY[cfg.head_strategy]

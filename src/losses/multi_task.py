@@ -95,7 +95,7 @@ def compute_loss(
     if "regression" in outputs:
         reg_mask = batch["reg_mask"]  # (B, D)
         reg_out = outputs["regression"]
-        if isinstance(reg_out, dict) and "heatmap_2d" in reg_out:
+        if isinstance(reg_out, dict) and any(k.startswith("heatmap_") for k in reg_out):
             # Heatmap head
             from losses.heatmap import compute_heatmap_loss
 

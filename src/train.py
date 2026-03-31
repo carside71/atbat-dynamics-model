@@ -251,17 +251,27 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
     # === ヒートマップ物理範囲→正規化範囲の変換 ===
     if model_cfg.regression_head_type == "heatmap":
+        # ターゲット名の順序を保存（設定モードの損失計算・デコードで使用）
+        model_cfg.heatmap_target_reg = list(data_cfg.target_reg)
+
         _heatmap_range_map = [
             ("launch_speed", "heatmap_range_launch_speed", "heatmap_norm_range_launch_speed"),
             ("launch_angle", "heatmap_range_launch_angle", "heatmap_norm_range_launch_angle"),
             ("hit_distance_sc", "heatmap_range_hit_distance", "heatmap_norm_range_hit_distance"),
             ("spray_angle", "heatmap_range_spray_angle", "heatmap_norm_range_spray_angle"),
         ]
+        norm_ranges: dict[str, list[float]] = {}
         for col_name, phys_attr, norm_attr in _heatmap_range_map:
             if col_name in reg_norm_stats:
                 mean, std = reg_norm_stats[col_name]
                 phys = getattr(model_cfg, phys_attr)
-                setattr(model_cfg, norm_attr, [(phys[0] - mean) / std, (phys[1] - mean) / std])
+                norm = [(phys[0] - mean) / std, (phys[1] - mean) / std]
+                setattr(model_cfg, norm_attr, norm)
+                norm_ranges[col_name] = norm
+
+        # 設定モード用: ターゲット名→正規化値域の dict を保存
+        if model_cfg.heatmap_heads is not None:
+            model_cfg.heatmap_norm_ranges = norm_ranges
 
     # === Physics Consistency Loss（正規化パラメータが必要なためここで構築）===
     physics_loss_fn = None

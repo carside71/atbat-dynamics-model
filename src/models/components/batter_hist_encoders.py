@@ -199,7 +199,7 @@ class TransformerBatterHistEncoder(BaseBatterHistEncoder):
             dropout=cfg.dropout,
             batch_first=True,
         )
-        self.outer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.batter_hist_num_layers)
+        self.outer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.batter_hist_num_layers, enable_nested_tensor=False)
         self._output_dim = cfg.batter_hist_hidden_dim
 
     @property
