@@ -17,8 +17,9 @@ def model_forward(
     data_cfg: DataConfig,
     use_seq: bool,
     use_batter_hist: bool = False,
+    use_pitcher_hist: bool = False,
 ) -> dict[str, torch.Tensor]:
-    """モデルの forward を呼び出す（シーケンス・打者履歴対応）."""
+    """モデルの forward を呼び出す（シーケンス・打者履歴・投手履歴対応）."""
     cat_dict = {col: batch[col] for col in data_cfg.categorical_features}
     kwargs = {}
     if use_seq:
@@ -41,5 +42,18 @@ def model_forward(
             hist_spray_angle=batch["hist_spray_angle"],
             hist_pitch_mask=batch["hist_pitch_mask"],
             hist_atbat_mask=batch["hist_atbat_mask"],
+        )
+    if use_pitcher_hist:
+        kwargs.update(
+            pitcher_hist_pitch_type=batch["pitcher_hist_pitch_type"],
+            pitcher_hist_cont=batch["pitcher_hist_cont"],
+            pitcher_hist_swing_attempt=batch["pitcher_hist_swing_attempt"],
+            pitcher_hist_swing_result=batch["pitcher_hist_swing_result"],
+            pitcher_hist_bb_type=batch["pitcher_hist_bb_type"],
+            pitcher_hist_launch_speed=batch["pitcher_hist_launch_speed"],
+            pitcher_hist_launch_angle=batch["pitcher_hist_launch_angle"],
+            pitcher_hist_spray_angle=batch["pitcher_hist_spray_angle"],
+            pitcher_hist_pitch_mask=batch["pitcher_hist_pitch_mask"],
+            pitcher_hist_atbat_mask=batch["pitcher_hist_atbat_mask"],
         )
     return model(cat_dict, batch["cont"], batch["ord"], **kwargs)

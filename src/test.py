@@ -44,13 +44,16 @@ def collect_predictions(
     device: torch.device,
     use_seq: bool = False,
     use_batter_hist: bool = False,
+    use_pitcher_hist: bool = False,
     save_inputs: bool = False,
+    saved_model_cfg: dict | None = None,
 ) -> dict[str, np.ndarray]:
     """全バッチの予測とラベルを収集する."""
     all_sa_prob, all_sa_true = [], []
     all_sr_logits, all_sr_true = [], []
     all_bt_logits, all_bt_true = [], []
     all_reg_pred, all_reg_true, all_reg_mask = [], [], []
+    all_bt_true_for_reg = []  # 回帰スコープでも bb_type 正解を収集
 
     # 入力特徴量の収集用（save_inputs=True 時のみ）
     all_cat: dict[str, list[np.ndarray]] = {col: [] for col in data_cfg.categorical_features} if save_inputs else {}
@@ -59,7 +62,7 @@ def collect_predictions(
 
     for batch in tqdm(loader, desc="Predicting"):
         batch = move_batch_to_device(batch, device)
-        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist, use_pitcher_hist)
 
         if "swing_attempt" in outputs:
             all_sa_prob.append(outputs["swing_attempt"].sigmoid().cpu().numpy())
@@ -75,7 +78,75 @@ def collect_predictions(
 
         if "regression" in outputs:
             reg_out = outputs["regression"]
-            if isinstance(reg_out, dict):
+            if isinstance(reg_out, dict) and any(k.startswith("heatmap_") for k in reg_out):
+                # Heatmap head: ヒートマップ + オフセットからデコード
+                from models.components.heatmap_utils import decode_heatmap_1d, decode_heatmap_2d, make_heatmap_key
+
+                heatmap_heads_raw = saved_model_cfg.get("heatmap_heads", None)
+
+                if heatmap_heads_raw is None:
+                    # レガシーモード: ハードコードされた構成
+                    range_la = tuple(saved_model_cfg.get("heatmap_norm_range_launch_angle", [-4.0, 4.0]))
+                    range_sa = tuple(saved_model_cfg.get("heatmap_norm_range_spray_angle", [-4.0, 4.0]))
+                    range_ls = tuple(saved_model_cfg.get("heatmap_norm_range_launch_speed", [-4.0, 4.0]))
+                    range_hd = tuple(saved_model_cfg.get("heatmap_norm_range_hit_distance", [-4.0, 4.0]))
+                    grid_h = saved_model_cfg.get("heatmap_grid_h", 64)
+                    grid_w = saved_model_cfg.get("heatmap_grid_w", 64)
+                    num_bins = saved_model_cfg.get("heatmap_num_bins", 64)
+
+                    la_sa = decode_heatmap_2d(
+                        reg_out["heatmap_2d"], reg_out["offset_2d"],
+                        value_range_h=range_la, value_range_w=range_sa,
+                        grid_h=grid_h, grid_w=grid_w,
+                    )
+                    ls = decode_heatmap_1d(
+                        reg_out["heatmap_launch_speed"], reg_out["offset_launch_speed"],
+                        range_ls, num_bins,
+                    )
+                    hd = decode_heatmap_1d(
+                        reg_out["heatmap_hit_distance"], reg_out["offset_hit_distance"],
+                        range_hd, num_bins,
+                    )
+                    reg_pred = torch.stack([ls, la_sa[:, 0], hd, la_sa[:, 1]], dim=-1)
+                    all_reg_pred.append(reg_pred.cpu().numpy())
+                else:
+                    # 設定モード: heatmap_heads に基づく動的デコード
+                    target_reg = saved_model_cfg.get("heatmap_target_reg")
+                    norm_ranges = saved_model_cfg.get("heatmap_norm_ranges", {})
+                    target_index = {name: i for i, name in enumerate(target_reg)}
+                    B = next(iter(reg_out.values())).size(0)
+                    num_targets = len(target_reg)
+                    reg_pred = torch.zeros(B, num_targets, device=device)
+
+                    for hc in heatmap_heads_raw:
+                        key = make_heatmap_key(hc["type"], hc["targets"])
+                        hm_key = f"heatmap_{key}"
+                        off_key = f"offset_{key}"
+
+                        if hc["type"] == "2d":
+                            t0, t1 = hc["targets"]
+                            range_h = tuple(norm_ranges[t0])
+                            range_w = tuple(norm_ranges[t1])
+                            gh = hc.get("grid_h") or saved_model_cfg.get("heatmap_grid_h", 64)
+                            gw = hc.get("grid_w") or saved_model_cfg.get("heatmap_grid_w", 64)
+                            decoded = decode_heatmap_2d(
+                                reg_out[hm_key], reg_out[off_key],
+                                value_range_h=range_h, value_range_w=range_w,
+                                grid_h=gh, grid_w=gw,
+                            )
+                            reg_pred[:, target_index[t0]] = decoded[:, 0]
+                            reg_pred[:, target_index[t1]] = decoded[:, 1]
+                        else:
+                            t = hc["targets"][0]
+                            vrange = tuple(norm_ranges[t])
+                            nb = hc.get("num_bins") or saved_model_cfg.get("heatmap_num_bins", 64)
+                            decoded = decode_heatmap_1d(
+                                reg_out[hm_key], reg_out[off_key], vrange, nb,
+                            )
+                            reg_pred[:, target_index[t]] = decoded
+
+                    all_reg_pred.append(reg_pred.cpu().numpy())
+            elif isinstance(reg_out, dict):
                 # MDN: 混合係数で重み付けした期待値を点推定とする
                 pi = reg_out["pi"]  # (B, K)
                 mu = reg_out["mu"]  # (B, K, D)
@@ -86,6 +157,7 @@ def collect_predictions(
                 all_reg_pred.append(reg_out.cpu().numpy())
             all_reg_true.append(batch["reg_targets"].cpu().numpy())
             all_reg_mask.append(batch["reg_mask"].cpu().numpy())
+            all_bt_true_for_reg.append(batch["bb_type"].cpu().numpy())
 
         if save_inputs:
             for col in data_cfg.categorical_features:
@@ -111,6 +183,8 @@ def collect_predictions(
         result["reg_pred"] = np.concatenate(all_reg_pred)
         result["reg_true"] = np.concatenate(all_reg_true)
         result["reg_mask"] = np.concatenate(all_reg_mask)
+    if all_bt_true_for_reg:
+        result["bt_true_for_reg"] = np.concatenate(all_bt_true_for_reg)
 
     if save_inputs:
         for col in data_cfg.categorical_features:
@@ -141,19 +215,27 @@ def evaluate_swing_attempt(sa_prob: np.ndarray, sa_true: np.ndarray) -> dict:
 
 
 def evaluate_multiclass(
-    logits: np.ndarray,
+    logits: np.ndarray | None,
     true: np.ndarray,
     class_names: list[str] | None = None,
     task_name: str = "",
+    pred: np.ndarray | None = None,
 ) -> dict:
-    """マルチクラス分類の評価メトリクスを計算する（有効サンプルのみ）."""
+    """マルチクラス分類の評価メトリクスを計算する（有効サンプルのみ）.
+
+    logits を渡した場合は argmax で予測クラスを決定する。
+    pred を直接渡した場合は argmax をスキップする（回帰値からの導出等）。
+    """
     mask = true >= 0
     if not mask.any():
         return {"n_samples": 0}
 
-    logits = logits[mask]
     true = true[mask]
-    pred = logits.argmax(axis=-1)
+    if pred is not None:
+        pred = pred[mask]
+    else:
+        logits = logits[mask]
+        pred = logits.argmax(axis=-1)
 
     metrics = {
         "n_samples": int(mask.sum()),
@@ -180,6 +262,7 @@ def evaluate_regression(
     mask: np.ndarray,
     col_names: list[str],
     reg_norm_stats: dict[str, tuple[float, float]],
+    pck_thresholds: dict[str, list[float]] | None = None,
 ) -> dict:
     """回帰タスクの評価メトリクスを計算する（元スケールに逆変換）."""
     metrics = {}
@@ -205,7 +288,72 @@ def evaluate_regression(
             "r2": float(r2_score(t, p)),
         }
 
+        # PCK (Percentage of Correct Keypoints) 的評価
+        if pck_thresholds and col in pck_thresholds:
+            abs_error = np.abs(p - t)
+            pck = {}
+            for th in pck_thresholds[col]:
+                pck[str(th)] = float((abs_error <= th).mean())
+            metrics[col]["pck"] = pck
+
     return metrics
+
+
+def evaluate_bb_type_from_regression(
+    reg_pred: np.ndarray,
+    reg_mask: np.ndarray,
+    bt_true: np.ndarray,
+    target_reg: list[str],
+    reg_norm_stats: dict[str, tuple[float, float]],
+    bt_names: list[str] | None = None,
+) -> dict:
+    """回帰予測の launch_angle から bb_type を導出し、正解ラベルと比較する."""
+    if "launch_angle" not in target_reg:
+        return {"n_samples": 0}
+
+    la_idx = target_reg.index("launch_angle")
+    valid = (reg_mask[:, la_idx] > 0.5) & (bt_true >= 0)
+    if not valid.any():
+        return {"n_samples": 0}
+
+    # 逆正規化して物理スケール（度）に戻す
+    la_pred = reg_pred[valid, la_idx]
+    if "launch_angle" in reg_norm_stats:
+        mean, std = reg_norm_stats["launch_angle"]
+        la_pred = la_pred * std + mean
+
+    bt_pred = launch_angle_to_bb_type(la_pred)
+    return evaluate_multiclass(None, bt_true[valid], bt_names, "bb_type_from_reg", pred=bt_pred)
+
+
+# Statcast bb_type 閾値（度）: PhysicsLoss と同一基準
+_BB_TYPE_LA_THRESHOLDS = (10.0, 25.0, 50.0)  # GB/LD, LD/FB, FB/PU
+
+
+def launch_angle_to_bb_type(launch_angle_deg: np.ndarray) -> np.ndarray:
+    """launch_angle（度）を Statcast 基準で bb_type クラスに変換する.
+
+    GB(0) < 10° ≤ LD(2) ≤ 25° < FB(1) ≤ 50° < PU(3)
+    """
+    t_gb_ld, t_ld_fb, t_fb_pu = _BB_TYPE_LA_THRESHOLDS
+    return np.select(
+        [
+            launch_angle_deg < t_gb_ld,
+            launch_angle_deg <= t_ld_fb,
+            launch_angle_deg <= t_fb_pu,
+        ],
+        [0, 2, 1],
+        default=3,
+    )
+
+
+# 回帰ターゲットの単位（表示用）
+_REG_TARGET_UNITS: dict[str, str] = {
+    "launch_speed": "mph",
+    "launch_angle": "deg",
+    "hit_distance_sc": "ft",
+    "spray_angle": "deg",
+}
 
 
 def print_results(results: dict) -> None:
@@ -259,6 +407,22 @@ def print_results(results: dict) -> None:
                         f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
                     )
 
+    # bb_type from regression launch_angle
+    if "bb_type_from_reg" in results:
+        bt_reg = results["bb_type_from_reg"]
+        print(f"\n--- bb_type from regression launch_angle (n={bt_reg['n_samples']:,}) ---")
+        if bt_reg["n_samples"] > 0:
+            print(f"  Accuracy   : {bt_reg['accuracy']:.4f}")
+            print(f"  F1 (macro) : {bt_reg['f1_macro']:.4f}")
+            print(f"  F1 (weighted): {bt_reg['f1_weighted']:.4f}")
+            report = bt_reg["classification_report"]
+            print("  Per-class F1:")
+            for k, v in report.items():
+                if isinstance(v, dict) and "f1-score" in v:
+                    print(
+                        f"    {k:>25s}: f1={v['f1-score']:.4f}  prec={v['precision']:.4f}  rec={v['recall']:.4f}  n={v['support']:.0f}"
+                    )
+
     # regression
     if "regression" in results:
         reg = results["regression"]
@@ -271,6 +435,10 @@ def print_results(results: dict) -> None:
             print(f"    MAE  : {m['mae']:.2f}")
             print(f"    RMSE : {m['rmse']:.2f}")
             print(f"    R²   : {m['r2']:.4f}")
+            if "pck" in m:
+                unit = _REG_TARGET_UNITS.get(col, "")
+                parts = [f"@{th}{unit}={v * 100:.2f}%" for th, v in m["pck"].items()]
+                print(f"    PCK  : {'  '.join(parts)}")
 
     print("\n" + "=" * 70)
 
@@ -294,13 +462,19 @@ def main():
     )
     args = parser.parse_args()
 
+    model_dir = Path(args.model_dir) if args.model_dir else None
+
     if args.config:
         data_cfg, _, train_cfg = load_config(args.config)
+    elif model_dir and (model_dir / "config.yaml").exists():
+        print(f"Using config from model directory: {model_dir / 'config.yaml'}")
+        data_cfg, _, train_cfg = load_config(model_dir / "config.yaml")
     else:
         data_cfg = DataConfig()
         train_cfg = TrainConfig()
 
-    model_dir = Path(args.model_dir) if args.model_dir else data_cfg.output_dir
+    if model_dir is None:
+        model_dir = data_cfg.output_dir
     device = torch.device(train_cfg.device if torch.cuda.is_available() else "cpu")
 
     # テスト出力ディレクトリを先に作成し、ログを端末とファイルの両方に出力
@@ -339,7 +513,10 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     use_batter_hist = saved_model_cfg.get("batter_hist_max_atbats", 0) > 0
     batter_hist_max_atbats = saved_model_cfg.get("batter_hist_max_atbats", 0)
     batter_hist_max_pitches = saved_model_cfg.get("batter_hist_max_pitches", 10)
-    need_at_bat_id = use_seq or use_batter_hist
+    use_pitcher_hist = saved_model_cfg.get("pitcher_hist_max_atbats", 0) > 0
+    pitcher_hist_max_atbats = saved_model_cfg.get("pitcher_hist_max_atbats", 0)
+    pitcher_hist_max_pitches = saved_model_cfg.get("pitcher_hist_max_pitches", 10)
+    need_at_bat_id = use_seq or use_batter_hist or use_pitcher_hist
 
     print(f"Model scope: {model_scope}")
 
@@ -356,9 +533,28 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     print(f"  Samples: {len(test_df):,}")
 
     # === outcome スコープ: swing_attempt=1 のサンプルのみに絞り込み ===
-    if model_scope in ("outcome", "regression"):
+    if model_scope == "outcome":
         test_df = test_df[test_df["swing_attempt"] == 1].reset_index(drop=True)
         print(f"  Filtered to swing_attempt=1: {len(test_df):,} samples")
+
+    # === regression スコープ: YAML設定ベースのフィルタ ===
+    if model_scope == "regression":
+        if data_cfg.filter_swing_attempt:
+            test_df = test_df[test_df["swing_attempt"] == 1].reset_index(drop=True)
+            print(f"  Filtered to swing_attempt=1: {len(test_df):,} samples")
+
+        if data_cfg.reg_target_filter in ("any", "all"):
+            reg_cols = data_cfg.target_reg
+            if data_cfg.reg_target_filter == "any":
+                cond = test_df[reg_cols].notna().any(axis=1)
+            else:
+                cond = test_df[reg_cols].notna().all(axis=1)
+            test_df = test_df[cond].reset_index(drop=True)
+            print(f"  Filtered by reg_target_filter={data_cfg.reg_target_filter!r}: {len(test_df):,} samples")
+
+        print("  Test label distribution:")
+        print(f"    swing_result: {test_df[data_cfg.target_cls_swing_result].value_counts().sort_index().to_dict()}")
+        print(f"    bb_type: {test_df[data_cfg.target_cls_bb_type].value_counts().sort_index().to_dict()}")
 
     # メタデータ列を保存用に抽出（Dataset 構築前に取得）
     sample_meta_arrays = {}
@@ -383,6 +579,8 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
         max_seq_len=max_seq_len,
         batter_hist_max_atbats=batter_hist_max_atbats,
         batter_hist_max_pitches=batter_hist_max_pitches,
+        pitcher_hist_max_atbats=pitcher_hist_max_atbats,
+        pitcher_hist_max_pitches=pitcher_hist_max_pitches,
     )
     del test_df
 
@@ -400,7 +598,7 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
     model = load_trained_model(model_path, model_config_path, device)
 
     # === 予測収集 ===
-    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, use_batter_hist, save_inputs=args.save_predictions)
+    preds = collect_predictions(model, test_loader, data_cfg, device, use_seq, use_batter_hist, use_pitcher_hist, save_inputs=args.save_predictions, saved_model_cfg=saved_model_cfg)
 
     # === 評価 ===
     results = {}
@@ -417,6 +615,16 @@ def _test(args, data_cfg, train_cfg, model_dir, test_output_dir, device):
             preds["reg_mask"],
             data_cfg.target_reg,
             reg_norm_stats,
+            pck_thresholds=data_cfg.pck_thresholds,
+        )
+    if "reg_pred" in preds and "bt_true_for_reg" in preds:
+        results["bb_type_from_reg"] = evaluate_bb_type_from_regression(
+            preds["reg_pred"],
+            preds["reg_mask"],
+            preds["bt_true_for_reg"],
+            data_cfg.target_reg,
+            reg_norm_stats,
+            bt_names,
         )
 
     print_results(results)

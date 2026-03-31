@@ -1,4 +1,4 @@
-"""打者履歴エンコーダ コンポーネント."""
+"""投手履歴エンコーダ コンポーネント."""
 
 import torch
 import torch.nn as nn
@@ -6,14 +6,14 @@ import torch.nn as nn
 from config import ModelConfig
 from utils.registry import make_registry
 
-BATTER_HIST_ENCODER_REGISTRY, register_batter_hist_encoder = make_registry()
+PITCHER_HIST_ENCODER_REGISTRY, register_pitcher_hist_encoder = make_registry()
 
 
-class BaseBatterHistEncoder(nn.Module):
-    """打者履歴エンコーダの基底クラス.
+class BasePitcherHistEncoder(nn.Module):
+    """投手履歴エンコーダの基底クラス.
 
     Inner GRU: 各打席の投球列 → 打席ベクトル（全サブクラス共通）
-    Outer エンコーダ: 打席列 → 打者履歴ベクトル（サブクラスで実装）
+    Outer エンコーダ: 打席列 → 投手履歴ベクトル（サブクラスで実装）
     """
 
     def __init__(
@@ -46,14 +46,14 @@ class BaseBatterHistEncoder(nn.Module):
 
         self.inner_gru = nn.GRU(
             input_size=hist_pitch_input_dim,
-            hidden_size=cfg.batter_hist_hidden_dim,
+            hidden_size=cfg.pitcher_hist_hidden_dim,
             num_layers=1,
             batch_first=True,
         )
 
         bb_embed_dim = 4
         self.bb_type_embed = nn.Embedding(cfg.num_bb_type + 1, bb_embed_dim)
-        self.atbat_vec_dim = cfg.batter_hist_hidden_dim + bb_embed_dim + 3
+        self.atbat_vec_dim = cfg.pitcher_hist_hidden_dim + bb_embed_dim + 3
 
     def _encode_inner(
         self,
@@ -95,7 +95,7 @@ class BaseBatterHistEncoder(nn.Module):
 
         inner_lengths = flat_pmask.sum(dim=1).long()
         has_pitches = inner_lengths > 0
-        inner_out = torch.zeros(B * N, self.cfg.batter_hist_hidden_dim, device=device)
+        inner_out = torch.zeros(B * N, self.cfg.pitcher_hist_hidden_dim, device=device)
 
         if has_pitches.any():
             packed = nn.utils.rnn.pack_padded_sequence(
@@ -107,7 +107,7 @@ class BaseBatterHistEncoder(nn.Module):
             _, h_n = self.inner_gru(packed)
             inner_out[has_pitches] = h_n[-1]
 
-        inner_out = inner_out.reshape(B, N, self.cfg.batter_hist_hidden_dim)
+        inner_out = inner_out.reshape(B, N, self.cfg.pitcher_hist_hidden_dim)
 
         # --- 打席結果を結合 ---
         bb = hist_bb_type.clone()
@@ -123,9 +123,9 @@ class BaseBatterHistEncoder(nn.Module):
         return atbat_vecs, atbat_lengths
 
 
-@register_batter_hist_encoder("gru")
-class GRUBatterHistEncoder(BaseBatterHistEncoder):
-    """GRU ベースの打者履歴エンコーダ."""
+@register_pitcher_hist_encoder("gru")
+class GRUPitcherHistEncoder(BasePitcherHistEncoder):
+    """GRU ベースの投手履歴エンコーダ."""
 
     def __init__(
         self, cfg: ModelConfig, num_cont: int, seq_pitch_type_embed: nn.Embedding, seq_swing_result_embed: nn.Embedding
@@ -133,12 +133,12 @@ class GRUBatterHistEncoder(BaseBatterHistEncoder):
         super().__init__(cfg, num_cont, seq_pitch_type_embed, seq_swing_result_embed)
         self.outer_gru = nn.GRU(
             input_size=self.atbat_vec_dim,
-            hidden_size=cfg.batter_hist_hidden_dim,
-            num_layers=cfg.batter_hist_num_layers,
+            hidden_size=cfg.pitcher_hist_hidden_dim,
+            num_layers=cfg.pitcher_hist_num_layers,
             batch_first=True,
-            dropout=cfg.dropout if cfg.batter_hist_num_layers > 1 else 0.0,
+            dropout=cfg.dropout if cfg.pitcher_hist_num_layers > 1 else 0.0,
         )
-        self._output_dim = cfg.batter_hist_hidden_dim
+        self._output_dim = cfg.pitcher_hist_hidden_dim
 
     @property
     def output_dim(self) -> int:
@@ -182,25 +182,25 @@ class GRUBatterHistEncoder(BaseBatterHistEncoder):
         return hist_out
 
 
-@register_batter_hist_encoder("transformer")
-class TransformerBatterHistEncoder(BaseBatterHistEncoder):
-    """Transformer ベースの打者履歴エンコーダ."""
+@register_pitcher_hist_encoder("transformer")
+class TransformerPitcherHistEncoder(BasePitcherHistEncoder):
+    """Transformer ベースの投手履歴エンコーダ."""
 
     def __init__(
         self, cfg: ModelConfig, num_cont: int, seq_pitch_type_embed: nn.Embedding, seq_swing_result_embed: nn.Embedding
     ):
         super().__init__(cfg, num_cont, seq_pitch_type_embed, seq_swing_result_embed)
-        self.input_proj = nn.Linear(self.atbat_vec_dim, cfg.batter_hist_hidden_dim)
-        nhead = max(1, cfg.batter_hist_hidden_dim // 16)
+        self.input_proj = nn.Linear(self.atbat_vec_dim, cfg.pitcher_hist_hidden_dim)
+        nhead = max(1, cfg.pitcher_hist_hidden_dim // 16)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=cfg.batter_hist_hidden_dim,
+            d_model=cfg.pitcher_hist_hidden_dim,
             nhead=nhead,
-            dim_feedforward=cfg.batter_hist_hidden_dim * 4,
+            dim_feedforward=cfg.pitcher_hist_hidden_dim * 4,
             dropout=cfg.dropout,
             batch_first=True,
         )
-        self.outer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.batter_hist_num_layers, enable_nested_tensor=False)
-        self._output_dim = cfg.batter_hist_hidden_dim
+        self.outer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.pitcher_hist_num_layers, enable_nested_tensor=False)
+        self._output_dim = cfg.pitcher_hist_hidden_dim
 
     @property
     def output_dim(self) -> int:
@@ -247,7 +247,3 @@ class TransformerBatterHistEncoder(BaseBatterHistEncoder):
 
         hist_out[all_padding] = 0.0
         return hist_out
-
-
-# 後方互換エイリアス
-HierarchicalGRUBatterHistoryEncoder = GRUBatterHistEncoder

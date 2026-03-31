@@ -43,6 +43,18 @@ data:
     - hit_distance_sc
     - spray_angle
 
+  # model_scope=regression の場合のみ有効
+  filter_swing_attempt: true     # swing_attempt==1 フィルタ
+  reg_target_filter: "all"       # "none" | "any" | "all"
+
+  # PCK 閾値（ターゲットごと、元スケール）
+  # GT±閾値以内に予測が収まるサンプルの割合を算出する
+  pck_thresholds:
+    launch_speed: [2.0, 5.0, 10.0]       # 単位: mph
+    launch_angle: [5.0, 10.0, 15.0]      # 単位: degrees
+    hit_distance_sc: [10.0, 25.0, 50.0]  # 単位: ft
+    spray_angle: [5.0, 10.0, 15.0]       # 単位: degrees
+
 model:
   model_scope: regression
   backbone_type: dnn
@@ -50,13 +62,23 @@ model:
   head_hidden: [64]
   head_activation: relu
   dropout: 0.2
+  pitch_seq_max_len: 10
+  pitch_seq_encoder_type: gru
+  pitch_seq_hidden_dim: 64
+  pitch_seq_num_layers: 1
+  pitch_seq_bidirectional: false
+  batter_hist_max_atbats: 50
+  batter_hist_max_pitches: 10
+  batter_hist_encoder_type: gru
+  batter_hist_hidden_dim: 64
+  batter_hist_num_layers: 1
 
 train:
   batch_size: 4096
-  num_epochs: 20
+  num_epochs: 40
   lr: 1.0e-3
   weight_decay: 1.0e-5
-  num_workers: 4
+  num_workers: 8
   device: cuda
   seed: 42
 

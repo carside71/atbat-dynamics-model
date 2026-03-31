@@ -9,6 +9,7 @@ from models.components.batter_hist_encoders import BATTER_HIST_ENCODER_REGISTRY
 from models.components.embedding import FeatureEmbedding
 from models.components.head_strategies import HEAD_STRATEGY_REGISTRY
 from models.components.pitch_seq_encoders import PITCH_SEQ_ENCODER_REGISTRY
+from models.components.pitcher_hist_encoders import PITCHER_HIST_ENCODER_REGISTRY
 
 
 class ComposableModel(nn.Module):
@@ -41,9 +42,27 @@ class ComposableModel(nn.Module):
             )
             feat_dim += self.hist_encoder.output_dim
 
-        # 4. Backbone
+        # 4. 投手履歴エンコーダ（オプション）
+        self.pitcher_hist_encoder = None
+        if cfg.pitcher_hist_max_atbats > 0:
+            pitcher_hist_cls = PITCHER_HIST_ENCODER_REGISTRY[cfg.pitcher_hist_encoder_type]
+            # embedding 共有チェーン: seq_encoder > hist_encoder > 自前作成
+            _pt_embed = (
+                self.seq_encoder.seq_pitch_type_embed if self.seq_encoder else
+                self.hist_encoder.seq_pitch_type_embed if self.hist_encoder else None
+            )
+            _sr_embed = (
+                self.seq_encoder.seq_swing_result_embed if self.seq_encoder else
+                self.hist_encoder.seq_swing_result_embed if self.hist_encoder else None
+            )
+            self.pitcher_hist_encoder = pitcher_hist_cls(
+                cfg, num_cont, seq_pitch_type_embed=_pt_embed, seq_swing_result_embed=_sr_embed,
+            )
+            feat_dim += self.pitcher_hist_encoder.output_dim
+
+        # 5. Backbone
         backbone_cls = BACKBONE_REGISTRY[cfg.backbone_type]
-        self.backbone = backbone_cls(feat_dim, cfg.backbone_hidden, cfg.dropout)
+        self.backbone = backbone_cls(feat_dim, cfg.backbone_hidden, cfg.dropout, cfg=cfg)
 
         # 5. Head Strategy
         strategy_cls = HEAD_STRATEGY_REGISTRY[cfg.head_strategy]
@@ -56,6 +75,10 @@ class ComposableModel(nn.Module):
     @property
     def is_batter_hist_model(self) -> bool:
         return self.hist_encoder is not None
+
+    @property
+    def is_pitcher_hist_model(self) -> bool:
+        return self.pitcher_hist_encoder is not None
 
     def forward(
         self,
@@ -77,6 +100,16 @@ class ComposableModel(nn.Module):
         hist_spray_angle: torch.Tensor | None = None,
         hist_pitch_mask: torch.Tensor | None = None,
         hist_atbat_mask: torch.Tensor | None = None,
+        pitcher_hist_pitch_type: torch.Tensor | None = None,
+        pitcher_hist_cont: torch.Tensor | None = None,
+        pitcher_hist_swing_attempt: torch.Tensor | None = None,
+        pitcher_hist_swing_result: torch.Tensor | None = None,
+        pitcher_hist_bb_type: torch.Tensor | None = None,
+        pitcher_hist_launch_speed: torch.Tensor | None = None,
+        pitcher_hist_launch_angle: torch.Tensor | None = None,
+        pitcher_hist_spray_angle: torch.Tensor | None = None,
+        pitcher_hist_pitch_mask: torch.Tensor | None = None,
+        pitcher_hist_atbat_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         B = cont.shape[0]
         device = cont.device
@@ -110,6 +143,25 @@ class ComposableModel(nn.Module):
             else:
                 hist_emb = torch.zeros(B, self.hist_encoder.output_dim, device=device)
             x = torch.cat([x, hist_emb], dim=-1)
+
+        # Pitcher history encoding
+        if self.pitcher_hist_encoder is not None:
+            if pitcher_hist_pitch_type is not None:
+                pitcher_hist_emb = self.pitcher_hist_encoder(
+                    pitcher_hist_pitch_type,
+                    pitcher_hist_cont,
+                    pitcher_hist_swing_attempt,
+                    pitcher_hist_swing_result,
+                    pitcher_hist_bb_type,
+                    pitcher_hist_launch_speed,
+                    pitcher_hist_launch_angle,
+                    pitcher_hist_spray_angle,
+                    pitcher_hist_pitch_mask,
+                    pitcher_hist_atbat_mask,
+                )
+            else:
+                pitcher_hist_emb = torch.zeros(B, self.pitcher_hist_encoder.output_dim, device=device)
+            x = torch.cat([x, pitcher_hist_emb], dim=-1)
 
         # Backbone
         h = self.backbone(x)

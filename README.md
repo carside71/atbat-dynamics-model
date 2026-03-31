@@ -166,7 +166,7 @@ python3 src/train.py --config configs/outcome/dnn.yaml
 # classification 専用モデルの学習（SA + SR + BT、回帰なし）
 python3 src/train.py --config configs/classification/dnn.yaml
 
-# regression 専用モデルの学習（swing_attempt=1 のサンプルのみ使用）
+# regression 専用モデルの学習（使用するサンプルは.yamlから指定可能）
 python3 src/train.py --config configs/regression/dnn.yaml
 
 # デフォルト設定で実行（YAML 不要）
@@ -248,6 +248,7 @@ python3 src/test.py --config configs/all/resdnn.yaml --save-predictions
 |---|---|---|
 | `all/dnn.yaml` | all | 基本マルチヘッド DNN (ReLU + BatchNorm) |
 | `all/dnn_mdn.yaml` | all | 回帰ヘッドを MDN に置換 |
+| `all/dnn_heatmap.yaml` | all | 回帰ヘッドをヒートマップヘッドに置換 |
 | `all/resdnn.yaml` | all | 残差接続 + GELU + LayerNorm |
 | `all/resdnn_cascade.yaml` | all | ResBlock + カスケードヘッド（ヘッド間情報伝達） |
 | `all/resdnn_cascade_physics.yaml` | all | ResBlock + カスケード + 物理的整合性損失 |

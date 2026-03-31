@@ -12,6 +12,7 @@
 | `stats_*.csv` | カテゴリカル特徴量のラベル対応テーブル |
 | `train_at_bat_ids.csv` / `valid_at_bat_ids.csv` / `test_at_bat_ids.csv` | 時系列分割の `at_bat_id` リスト |
 | `batter_game_history.parquet` / `atbat_row_indices.parquet` | 打者履歴ルックアップテーブル |
+| `pitcher_game_history.parquet` | 投手履歴ルックアップテーブル |
 | `atbat_metadata.parquet` / `player_names.json` | ビューア用メタデータ |
 
 データ分割は **時系列分割**（`game_date` ベース）で行われます。ダブルヘッダーを正しく区別するため `game_pk`（試合ごとに一意な ID）を使用します。
@@ -51,7 +52,7 @@
 | 1. Filter | `step_filter.py` | 2000球以上の打者を抽出 |
 | 2. Features | `step_features.py` | カラム選択・ゲームステート・軌道特徴量・plate_z正規化・spray_angle |
 | 3. Labels | `step_labels.py` | description解析・swing_result統合(3クラス)・カテゴリカルエンコード・stats生成 |
-| 4. Splits | `step_splits.py` | 時系列分割・打者履歴構築・メタデータ構築・保存 |
+| 4. Splits | `step_splits.py` | 時系列分割・打者履歴構築・投手履歴構築・メタデータ構築・保存 |
 | 5. Quality | `step_validate.py` | ソースデータの品質レポート（構築処理の成否ではない） |
 
 ### plate_z ゾーン正規化
@@ -106,7 +107,7 @@ spray_angle（打球方向角度）はフェアゾーンとファウルゾーン
 | `statcast_base.py` | `StatcastBaseDataset`（共通基底クラス） |
 | `statcast.py` | `StatcastDataset`（単一投球データセット） |
 | `statcast_sequence.py` | `StatcastSequenceDataset`（系列対応データセット） |
-| `statcast_batter_hist.py` | `StatcastBatterHistDataset`（打者履歴対応データセット） |
+| `statcast_batter_hist.py` | `StatcastBatterHistDataset`（打者履歴・投手履歴対応データセット） |
 
 ### クラス継承構造
 
@@ -114,7 +115,7 @@ spray_angle（打球方向角度）はフェアゾーンとファウルゾーン
 StatcastBaseDataset (statcast_base.py)
 ├── StatcastDataset (statcast.py)
 ├── StatcastSequenceDataset (statcast_sequence.py)
-└── StatcastBatterHistDataset (statcast_batter_hist.py)
+└── StatcastBatterHistDataset (statcast_batter_hist.py)  ← 投手履歴にも対応
 ```
 
 `StatcastBaseDataset` は全データセット共通の以下の処理を提供します:
@@ -242,8 +243,8 @@ ds = create_dataset(df, data_cfg, norm_stats, reg_norm_stats, max_seq_len=10)
 
 ## StatcastBatterHistDataset
 
-`StatcastBaseDataset` を継承。**打者の過去打席履歴（生投球データ）を提供する**データセット。
-`StatcastSequenceDataset` の全機能に加え、当該試合以前の過去 N 打席分の Statcast 生データを返す。
+`StatcastBaseDataset` を継承。**打者・投手の過去打席履歴（生投球データ）を提供する**データセット。
+`StatcastSequenceDataset` の全機能に加え、当該試合以前の過去 N 打席分の Statcast 生データを返す。投手履歴も同時に有効化可能。
 
 ### 仕組み
 
@@ -256,6 +257,17 @@ ds = create_dataset(df, data_cfg, norm_stats, reg_norm_stats, max_seq_len=10)
 
 現在の試合の打席では、過去 N=50 打席（a1〜a7 + それ以前）の
 投球データを参照可能。ダブルヘッダーも game_pk で区別。
+
+投手履歴も同じ仕組み（pitcher, game_pk でグルーピング）:
+
+投手 X の試合履歴 (game_pk 順)
+────────────────────────────────
+  game_pk=100 (8 打席) → at_bat_id: [p1, p2, ..., p8]
+  game_pk=200 (7 打席) → at_bat_id: [p9, ..., p15]
+  game_pk=300 (6 打席) → 現在の試合
+
+現在の試合の打席では、投手の過去 N=50 打席分の
+被打球データを参照可能。
 ```
 
 ### データソース
@@ -264,19 +276,20 @@ ds = create_dataset(df, data_cfg, norm_stats, reg_norm_stats, max_seq_len=10)
 
 | ファイル | 内容 |
 |---|---|
-| `batter_game_history.parquet` | (batter, game_pk) → 過去 N 打席の at_bat_id リスト |
+| `batter_game_history.parquet` | (batter, game_pk) → 打者の過去 N 打席の at_bat_id リスト |
+| `pitcher_game_history.parquet` | (pitcher, game_pk) → 投手の過去 N 打席の at_bat_id リスト |
 | `atbat_row_indices.parquet` | at_bat_id → 元データの行インデックス |
 
 ### 追加の出力フィールド
 
-`StatcastSequenceDataset` の出力に加えて、以下の打者履歴フィールドを返す:
+`StatcastSequenceDataset` の出力に加えて、以下の打者履歴フィールドを返す（`batter_hist_max_atbats > 0` 時）:
 
 | フィールド | 形状 | 説明 |
 |---|---|---|
 | `hist_pitch_type` | `(N, P)` | 過去打席の投球球種 |
 | `hist_cont` | `(N, P, 15)` | 過去打席の投球連続値特徴量（正規化済み） |
 | `hist_swing_attempt` | `(N, P)` | 過去打席のスイング有無 |
-| `hist_swing_result` | `(N,)` | 打席最終球のスイング結果 |
+| `hist_swing_result` | `(N, P)` | 過去打席のスイング結果 |
 | `hist_bb_type` | `(N,)` | 打球種別（ground_ball 等） |
 | `hist_launch_speed` | `(N,)` | 打球速度（正規化済み） |
 | `hist_launch_angle` | `(N,)` | 打球角度（正規化済み） |
@@ -286,23 +299,54 @@ ds = create_dataset(df, data_cfg, norm_stats, reg_norm_stats, max_seq_len=10)
 
 > **N** = `batter_hist_max_atbats`（デフォルト 50）、**P** = `batter_hist_max_pitches`（デフォルト 10）
 
+さらに、以下の投手履歴フィールドを返す（`pitcher_hist_max_atbats > 0` 時）:
+
+| フィールド | 形状 | 説明 |
+|---|---|---|
+| `pitcher_hist_pitch_type` | `(N', P')` | 投手の過去対戦の投球球種 |
+| `pitcher_hist_cont` | `(N', P', 15)` | 投手の過去対戦の投球連続値特徴量（正規化済み） |
+| `pitcher_hist_swing_attempt` | `(N', P')` | 投手の過去対戦のスイング有無 |
+| `pitcher_hist_swing_result` | `(N', P')` | 投手の過去対戦のスイング結果 |
+| `pitcher_hist_bb_type` | `(N',)` | 打球種別（ground_ball 等） |
+| `pitcher_hist_launch_speed` | `(N',)` | 被打球速度（正規化済み） |
+| `pitcher_hist_launch_angle` | `(N',)` | 被打球角度（正規化済み） |
+| `pitcher_hist_spray_angle` | `(N',)` | 被打球方向角度（正規化済み） |
+| `pitcher_hist_pitch_mask` | `(N', P')` | 投球レベルの有効マスク |
+| `pitcher_hist_atbat_mask` | `(N',)` | 打席レベルの有効マスク |
+
+> **N'** = `pitcher_hist_max_atbats`（デフォルト 50）、**P'** = `pitcher_hist_max_pitches`（デフォルト 10）
+
 > **注意**: 時系列分割が必須です。ランダム分割では将来のデータが履歴に混入するリークが発生します。
+> **注意**: 投手履歴を有効化するには `pitches.parquet` に `pitcher` カラムが含まれている必要があります（`build_dataset` の再実行が必要な場合があります）。
 
 ### 使い方
 
 ```python
 from datasets import StatcastBatterHistDataset
 
+# 打者履歴のみ
 ds = StatcastBatterHistDataset(
     df, data_cfg, max_seq_len=10, norm_stats=norm_stats,
     batter_hist_max_atbats=50,
     batter_hist_max_pitches=10,
 )
 
+# 打者履歴 + 投手履歴
+ds = StatcastBatterHistDataset(
+    df, data_cfg, max_seq_len=10,
+    batter_hist_max_atbats=50,
+    batter_hist_max_pitches=10,
+    pitcher_hist_max_atbats=50,
+    pitcher_hist_max_pitches=10,
+    norm_stats=norm_stats,
+)
+
 # または create_dataset ファクトリを使用
 from datasets import create_dataset
 ds = create_dataset(
     df, data_cfg, norm_stats, reg_norm_stats,
-    max_seq_len=10, batter_hist_max_atbats=50, batter_hist_max_pitches=10,
+    max_seq_len=10,
+    batter_hist_max_atbats=50, batter_hist_max_pitches=10,
+    pitcher_hist_max_atbats=50, pitcher_hist_max_pitches=10,
 )
 ```

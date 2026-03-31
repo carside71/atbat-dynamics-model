@@ -8,7 +8,11 @@ from models.components.heads import MDNHead, build_mlp_head
 
 
 def _build_regression_head(cfg: ModelConfig, in_dim: int) -> nn.Module:
-    """回帰ヘッドを構築する（MLP or MDN）."""
+    """回帰ヘッドを構築する（MLP / MDN / Heatmap）."""
+    if cfg.regression_head_type == "heatmap":
+        from models.components.heatmap_head import HeatmapHead
+
+        return HeatmapHead(in_dim=in_dim, cfg=cfg)
     if cfg.regression_head_type == "mdn":
         return MDNHead(
             in_dim=in_dim,

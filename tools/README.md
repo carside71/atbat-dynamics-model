@@ -8,6 +8,8 @@
 - [export\_graph — モデルグラフの可視化](#export_graph--モデルグラフの可視化)
 - [generate\_viewer — 予測結果の可視化（Prediction Viewer）](#generate_viewer--予測結果の可視化prediction-viewer)
 - [plot\_curves — 学習曲線プロット](#plot_curves--学習曲線プロット)
+- [plot\_distribution — データ分布の可視化](#plot_distribution--データ分布の可視化)
+- [visualize\_heatmap — ヒートマップ回帰の可視化](#visualize_heatmap--ヒートマップ回帰の可視化)
 
 ---
 
@@ -218,3 +220,135 @@ python3 -m tools.plot_curves outputs/run1 --format pdf --dpi 300
 | `--fontsize` | `12` | フォントサイズ |
 | `--format` | `png` | 出力形式（`png` / `pdf` / `svg`） |
 | `--dpi` | `150` | 解像度 |
+
+---
+
+## plot\_distribution — データ分布の可視化
+
+データセットの連続値カラムの分布を 1D ヒストグラムおよび 2D 密度プロットで可視化します。ヒートマップヘッドの物理値域（`heatmap_range_*`）設定の参考に使用できます。
+
+```bash
+# 回帰ターゲットの 1D ヒストグラム（regression scope フィルタ付き）
+python3 -m tools.plot_distribution /workspace/datasets/statcast-customized-v2 \
+    --columns launch_speed launch_angle hit_distance_sc spray_angle \
+    --filter-swing --reg-target-filter all
+
+# 2D 密度プロット（ヒートマップ軸の分布確認）
+python3 -m tools.plot_distribution /workspace/datasets/statcast-customized-v2 \
+    --plot-2d launch_angle:spray_angle launch_speed:hit_distance_sc \
+    --filter-swing --reg-target-filter all
+
+# 投球特徴量の分布（フィルタなし）
+python3 -m tools.plot_distribution /workspace/datasets/statcast-customized-v2 \
+    --columns release_speed release_spin_rate pfx_x pfx_z plate_x plate_z
+```
+
+### フィルタリング
+
+`model_scope=regression` と同等のフィルタリングを適用できます:
+
+- `--filter-swing`: `swing_attempt==1` のサンプルのみに絞り込み
+- `--reg-target-filter all|any`: 回帰ターゲットの欠損に基づくフィルタ（`all` = 全ターゲットが非 NaN、`any` = いずれか1つ以上が非 NaN）
+- `--reg-targets`: `--reg-target-filter` の対象カラム（デフォルト: launch\_speed, launch\_angle, hit\_distance\_sc, spray\_angle）
+
+### 出力内容
+
+- **1D ヒストグラム**: `hist_{column}.{format}` — 基本統計量（mean, std, min, max）と p1/p99 パーセンタイルの縦線を表示
+- **2D 密度プロット**: `hist2d_{col_x}_{col_y}.{format}` — カラーバー付き 2D ヒストグラム
+
+### オプション
+
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| `dataset_dir`（位置引数） | （必須） | データセットディレクトリ（parquet + splits/） |
+| `--columns` | 回帰ターゲット 4 列 | 1D ヒストグラムを描画するカラム（`--plot-2d` のみ指定時はスキップ） |
+| `--plot-2d` | — | 2D 密度プロット。`col_x:col_y` 形式で複数指定可 |
+| `--split` | `train` | データ分割（`train` / `val` / `test`） |
+| `--filter-swing` | `false` | `swing_attempt==1` でフィルタ |
+| `--reg-target-filter` | `none` | 回帰ターゲット欠損フィルタ（`none` / `any` / `all`） |
+| `--reg-targets` | 4 列 | `--reg-target-filter` の対象カラム |
+| `--output-dir` | `./figs` | 出力先ディレクトリ |
+| `--format` | `png` | 出力形式（`png` / `pdf` / `svg`） |
+| `--dpi` | `150` | 解像度 |
+| `--figsize W H` | `8 6` | 画像サイズ |
+| `--bins` | `100` | ヒストグラムのビン数 |
+| `--fontsize` | `12` | フォントサイズ |
+
+### シェルスクリプト
+
+よく使うコマンドパターンを `scripts/` に用意しています:
+
+| スクリプト | 内容 |
+|---|---|
+| `scripts/plot_dist_regression_targets.sh` | 回帰ターゲット 4 列の 1D ヒストグラム（regression scope フィルタ付き） |
+| `scripts/plot_dist_regression_2d.sh` | spray\_angle:launch\_angle / launch\_speed:hit\_distance\_sc の 2D 密度プロット |
+| `scripts/plot_dist_pitch_features.sh` | 投球特徴量 6 列の 1D 分布（フィルタなし） |
+
+---
+
+## visualize\_heatmap — ヒートマップ回帰の可視化
+
+ヒートマップ回帰ヘッド（`regression_head_type=heatmap`）を持つ学習済みモデルに対して、テストデータの推論結果をサンプル単位で可視化します。各サンプルについて、予測ヒートマップ・デコードされた予測値・GT を重ねた図を生成します。
+
+### 使い方
+
+```bash
+# テストデータから 10 サンプルを可視化
+python -m tools.visualize_heatmap \
+  --model-dir /workspace/outputs/atbat-dynamics-model/2026-03-28-120000 \
+  --num-samples 10 \
+  --split test
+
+# 出力先を明示して val データを可視化
+python -m tools.visualize_heatmap \
+  --model-dir /workspace/outputs/atbat-dynamics-model/2026-03-28-120000 \
+  --num-samples 20 \
+  --split val \
+  --output-dir /workspace/outputs/heatmap_vis
+
+# 概要グリッド画像も同時に生成
+python -m tools.visualize_heatmap \
+  --model-dir /workspace/outputs/atbat-dynamics-model/2026-03-28-120000 \
+  --num-samples 16 \
+  --overview-grid
+```
+
+### 出力内容
+
+1サンプルにつき 1 枚の PNG ファイルが生成されます。ファイル名は `sample_0000_idx{データセット内インデックス}.png` の形式です。
+
+各 PNG は横並びの複数パネルで構成されます:
+
+| パネル | 内容 |
+|---|---|
+| **2D ヒートマップ** | launch\_angle × spray\_angle のヒートマップを `hot` カラーマップで表示。予測値を青丸、GT を赤×で重ねてプロット。軸は物理値（deg）|
+| **1D ヒートマップ（launch\_speed）** | 予測分布をバーチャートで表示。予測値を青縦線、GT を赤破線でプロット。軸は物理値（mph） |
+| **1D ヒートマップ（hit\_distance\_sc）** | 同上。軸は物理値（ft） |
+
+GT が無効なサンプル（`reg_mask=0`）ではマーカーを省略し、タイトルに "GT: N/A" と表示します。
+
+### 対応するモデル
+
+- **レガシーモード**（`heatmap_heads` 未設定）: 固定 3 パネル（2D × 1 + 1D × 2）
+- **設定モード**（`heatmap_heads` 指定）: YAML 定義に基づく動的パネル構成
+
+### オプション
+
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| `--model-dir` | （必須） | `best_model.pt` / `model_config.json` / `norm_params.json` を含むディレクトリ |
+| `--model-file` | `best_model.pt` | モデル重みファイル名 |
+| `--split` | `test` | 可視化するデータ分割（`test` / `val` / `train`） |
+| `--num-samples` | `10` | 生成するサンプル図の枚数 |
+| `--output-dir` | `{model-dir}/heatmap_vis/` | PNG 出力先ディレクトリ |
+| `--seed` | `42` | サンプル選択の乱数シード |
+| `--batch-size` | `256` | 推論バッチサイズ |
+| `--device` | 自動検出 | デバイス指定（`cpu` / `cuda`） |
+| `--no-prefer-valid` | — | 指定時: `reg_mask` が有効なサンプルの優先をしない |
+| `--overview-grid` | — | 指定時: 全サンプルを格子状に並べた概要 PNG を追加生成 |
+
+### シェルスクリプト
+
+| スクリプト | 内容 |
+|---|---|
+| `scripts/visualize_heatmap.sh` | ヒートマップモデルの推論結果を可視化するサンプルコマンド |

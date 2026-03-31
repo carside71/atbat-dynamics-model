@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -81,7 +82,9 @@ def evaluate(
     loss_fn_bt: nn.Module | None = None,
     use_seq: bool = False,
     use_batter_hist: bool = False,
+    use_pitcher_hist: bool = False,
     physics_loss_fn: nn.Module | None = None,
+    model_cfg: "ModelConfig | None" = None,
 ) -> dict[str, float]:
     """検証データで評価を行い、損失とメトリクスを返す."""
     model.eval()
@@ -95,9 +98,9 @@ def evaluate(
 
     for batch in loader:
         batch = move_batch_to_device(batch, device)
-        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
+        outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist, use_pitcher_hist)
 
-        _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
+        _, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn, model_cfg=model_cfg)
         for k, v in losses.items():
             total_losses[k] = total_losses.get(k, 0.0) + v
         n_batches += 1
@@ -152,6 +155,10 @@ def main():
     output_dir = data_cfg.output_dir / config_name / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # 学習に使った YAML 設定ファイルを出力ディレクトリにコピー
+    if args.config:
+        shutil.copy2(args.config, output_dir / "config.yaml")
+
     # ログを端末とファイルの両方に出力
     with tee_logging(output_dir / "train.log"):
         _train(data_cfg, model_cfg, train_cfg, output_dir)
@@ -182,7 +189,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
 
     use_seq = model_cfg.pitch_seq_max_len > 0
     use_batter_hist = model_cfg.batter_hist_max_atbats > 0
-    need_at_bat_id = use_seq or use_batter_hist
+    use_pitcher_hist = model_cfg.pitcher_hist_max_atbats > 0
+    need_at_bat_id = use_seq or use_batter_hist or use_pitcher_hist
 
     if need_at_bat_id:
         train_df = all_df[all_df["at_bat_id"].isin(train_ids)].reset_index(drop=True)
@@ -200,12 +208,38 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     print(f"  Val samples: {len(val_df):,}")
 
     # === outcome スコープ: swing_attempt=1 のサンプルのみに絞り込み ===
-    if model_scope in ("outcome", "regression"):
+    if model_scope == "outcome":
         train_df = train_df[train_df["swing_attempt"] == 1].reset_index(drop=True)
         val_df = val_df[val_df["swing_attempt"] == 1].reset_index(drop=True)
         print("  Filtered to swing_attempt=1:")
         print(f"    Train samples: {len(train_df):,}")
         print(f"    Val samples: {len(val_df):,}")
+
+    # === regression スコープ: YAML設定ベースのフィルタ ===
+    if model_scope == "regression":
+        if data_cfg.filter_swing_attempt:
+            train_df = train_df[train_df["swing_attempt"] == 1].reset_index(drop=True)
+            val_df = val_df[val_df["swing_attempt"] == 1].reset_index(drop=True)
+            print("  Filtered to swing_attempt=1:")
+            print(f"    Train samples: {len(train_df):,}")
+            print(f"    Val samples: {len(val_df):,}")
+
+        if data_cfg.reg_target_filter in ("any", "all"):
+            reg_cols = data_cfg.target_reg
+            if data_cfg.reg_target_filter == "any":
+                cond = lambda df: df[reg_cols].notna().any(axis=1)
+            else:
+                cond = lambda df: df[reg_cols].notna().all(axis=1)
+            train_df = train_df[cond(train_df)].reset_index(drop=True)
+            val_df = val_df[cond(val_df)].reset_index(drop=True)
+            print(f"  Filtered by reg_target_filter={data_cfg.reg_target_filter!r}:")
+            print(f"    Train samples: {len(train_df):,}")
+            print(f"    Val samples: {len(val_df):,}")
+
+        for split_name, df in [("Train", train_df), ("Val", val_df)]:
+            print(f"  {split_name} label distribution:")
+            print(f"    swing_result: {df[data_cfg.target_cls_swing_result].value_counts().sort_index().to_dict()}")
+            print(f"    bb_type: {df[data_cfg.target_cls_bb_type].value_counts().sort_index().to_dict()}")
 
     # === 正規化パラメータを訓練データから計算 ===
     print("Computing normalization stats...")
@@ -216,6 +250,30 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
     norm_params = {"input": norm_stats, "target": reg_norm_stats}
     with open(output_dir / "norm_params.json", "w") as f:
         json.dump(norm_params, f, indent=2)
+
+    # === ヒートマップ物理範囲→正規化範囲の変換 ===
+    if model_cfg.regression_head_type == "heatmap":
+        # ターゲット名の順序を保存（設定モードの損失計算・デコードで使用）
+        model_cfg.heatmap_target_reg = list(data_cfg.target_reg)
+
+        _heatmap_range_map = [
+            ("launch_speed", "heatmap_range_launch_speed", "heatmap_norm_range_launch_speed"),
+            ("launch_angle", "heatmap_range_launch_angle", "heatmap_norm_range_launch_angle"),
+            ("hit_distance_sc", "heatmap_range_hit_distance", "heatmap_norm_range_hit_distance"),
+            ("spray_angle", "heatmap_range_spray_angle", "heatmap_norm_range_spray_angle"),
+        ]
+        norm_ranges: dict[str, list[float]] = {}
+        for col_name, phys_attr, norm_attr in _heatmap_range_map:
+            if col_name in reg_norm_stats:
+                mean, std = reg_norm_stats[col_name]
+                phys = getattr(model_cfg, phys_attr)
+                norm = [(phys[0] - mean) / std, (phys[1] - mean) / std]
+                setattr(model_cfg, norm_attr, norm)
+                norm_ranges[col_name] = norm
+
+        # 設定モード用: ターゲット名→正規化値域の dict を保存
+        if model_cfg.heatmap_heads is not None:
+            model_cfg.heatmap_norm_ranges = norm_ranges
 
     # === Physics Consistency Loss（正規化パラメータが必要なためここで構築）===
     physics_loss_fn = None
@@ -233,6 +291,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
         max_seq_len=model_cfg.pitch_seq_max_len,
         batter_hist_max_atbats=model_cfg.batter_hist_max_atbats,
         batter_hist_max_pitches=model_cfg.batter_hist_max_pitches,
+        pitcher_hist_max_atbats=model_cfg.pitcher_hist_max_atbats,
+        pitcher_hist_max_pitches=model_cfg.pitcher_hist_max_pitches,
     )
     train_ds = create_dataset(train_df, data_cfg, norm_stats, reg_norm_stats, **ds_kwargs)
     val_ds = create_dataset(val_df, data_cfg, norm_stats, reg_norm_stats, **ds_kwargs)
@@ -305,8 +365,8 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
             batch = move_batch_to_device(batch, device)
 
             optimizer.zero_grad()
-            outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist)
-            loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn)
+            outputs = model_forward(model, batch, data_cfg, use_seq, use_batter_hist, use_pitcher_hist)
+            loss, losses = compute_loss(outputs, batch, train_cfg, loss_fn_sr, loss_fn_bt, physics_loss_fn, model_cfg=model_cfg)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -341,7 +401,9 @@ def _train(data_cfg, model_cfg, train_cfg, output_dir):
             loss_fn_bt,
             use_seq,
             use_batter_hist,
+            use_pitcher_hist,
             physics_loss_fn,
+            model_cfg=model_cfg,
         )
 
         record = {"epoch": epoch, "lr": scheduler.get_last_lr()[0]}
