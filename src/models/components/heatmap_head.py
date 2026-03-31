@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from config import ModelConfig
+from models.components.heatmap_utils import make_heatmap_key
 
 
 class Heatmap2DSubHead(nn.Module):
@@ -169,34 +170,69 @@ class Heatmap1DSubHead(nn.Module):
 
 
 class HeatmapHead(nn.Module):
-    """3つのサブヘッドを束ねるヒートマップ回帰ヘッド.
+    """ヒートマップ回帰ヘッド.
 
-    - head_2d: launch_angle × spray_angle の 2D ヒートマップ
-    - head_launch_speed: launch_speed の 1D ヒートマップ
-    - head_hit_distance: hit_distance_sc の 1D ヒートマップ
+    heatmap_heads が設定されている場合（設定モード）:
+        YAML で指定された任意の 1D/2D サブヘッド構成を動的に構築する。
+
+    heatmap_heads が未設定の場合（レガシーモード）:
+        従来のハードコード構成を使用:
+        - head_2d: launch_angle × spray_angle の 2D ヒートマップ
+        - head_launch_speed: launch_speed の 1D ヒートマップ
+        - head_hit_distance: hit_distance_sc の 1D ヒートマップ
     """
 
     def __init__(self, in_dim: int, cfg: ModelConfig):
         super().__init__()
-        self.head_2d = Heatmap2DSubHead(
-            in_dim=in_dim,
-            grid_h=cfg.heatmap_grid_h,
-            grid_w=cfg.heatmap_grid_w,
-            intermediate_dim=cfg.heatmap_intermediate_dim,
-            dropout=cfg.dropout,
-        )
-        self.head_launch_speed = Heatmap1DSubHead(
-            in_dim=in_dim,
-            num_bins=cfg.heatmap_num_bins,
-            intermediate_dim=cfg.heatmap_intermediate_dim,
-            dropout=cfg.dropout,
-        )
-        self.head_hit_distance = Heatmap1DSubHead(
-            in_dim=in_dim,
-            num_bins=cfg.heatmap_num_bins,
-            intermediate_dim=cfg.heatmap_intermediate_dim,
-            dropout=cfg.dropout,
-        )
+        head_configs = cfg.get_heatmap_head_configs()
+        self._legacy_mode = head_configs is None
+
+        if self._legacy_mode:
+            # レガシーモード: 従来のハードコードサブヘッド
+            self.head_2d = Heatmap2DSubHead(
+                in_dim=in_dim,
+                grid_h=cfg.heatmap_grid_h,
+                grid_w=cfg.heatmap_grid_w,
+                intermediate_dim=cfg.heatmap_intermediate_dim,
+                dropout=cfg.dropout,
+            )
+            self.head_launch_speed = Heatmap1DSubHead(
+                in_dim=in_dim,
+                num_bins=cfg.heatmap_num_bins,
+                intermediate_dim=cfg.heatmap_intermediate_dim,
+                dropout=cfg.dropout,
+            )
+            self.head_hit_distance = Heatmap1DSubHead(
+                in_dim=in_dim,
+                num_bins=cfg.heatmap_num_bins,
+                intermediate_dim=cfg.heatmap_intermediate_dim,
+                dropout=cfg.dropout,
+            )
+        else:
+            # 設定モード: YAML 設定に基づく動的サブヘッド構築
+            self.sub_heads = nn.ModuleDict()
+            self._head_meta: list[tuple[str, str]] = []  # (key, type)
+            for hc in head_configs:
+                key = make_heatmap_key(hc.type, hc.targets)
+                if hc.type == "2d":
+                    grid_h = hc.grid_h if hc.grid_h is not None else cfg.heatmap_grid_h
+                    grid_w = hc.grid_w if hc.grid_w is not None else cfg.heatmap_grid_w
+                    self.sub_heads[key] = Heatmap2DSubHead(
+                        in_dim=in_dim,
+                        grid_h=grid_h,
+                        grid_w=grid_w,
+                        intermediate_dim=cfg.heatmap_intermediate_dim,
+                        dropout=cfg.dropout,
+                    )
+                else:
+                    num_bins = hc.num_bins if hc.num_bins is not None else cfg.heatmap_num_bins
+                    self.sub_heads[key] = Heatmap1DSubHead(
+                        in_dim=in_dim,
+                        num_bins=num_bins,
+                        intermediate_dim=cfg.heatmap_intermediate_dim,
+                        dropout=cfg.dropout,
+                    )
+                self._head_meta.append((key, hc.type))
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Forward pass.
@@ -205,23 +241,28 @@ class HeatmapHead(nn.Module):
             x: (B, in_dim) backbone 出力
 
         Returns:
-            dict with keys:
-                heatmap_2d: (B, 1, H, W)
-                offset_2d: (B, 2, H, W)
-                heatmap_launch_speed: (B, 1, L)
-                offset_launch_speed: (B, 1, L)
-                heatmap_hit_distance: (B, 1, L)
-                offset_hit_distance: (B, 1, L)
+            レガシーモード:
+                heatmap_2d, offset_2d, heatmap_launch_speed, offset_launch_speed,
+                heatmap_hit_distance, offset_hit_distance
+            設定モード:
+                heatmap_{key}, offset_{key} （key は make_heatmap_key で生成）
         """
-        hm_2d, off_2d = self.head_2d(x)
-        hm_ls, off_ls = self.head_launch_speed(x)
-        hm_hd, off_hd = self.head_hit_distance(x)
+        if self._legacy_mode:
+            hm_2d, off_2d = self.head_2d(x)
+            hm_ls, off_ls = self.head_launch_speed(x)
+            hm_hd, off_hd = self.head_hit_distance(x)
+            return {
+                "heatmap_2d": hm_2d,
+                "offset_2d": off_2d,
+                "heatmap_launch_speed": hm_ls,
+                "offset_launch_speed": off_ls,
+                "heatmap_hit_distance": hm_hd,
+                "offset_hit_distance": off_hd,
+            }
 
-        return {
-            "heatmap_2d": hm_2d,
-            "offset_2d": off_2d,
-            "heatmap_launch_speed": hm_ls,
-            "offset_launch_speed": off_ls,
-            "heatmap_hit_distance": hm_hd,
-            "offset_hit_distance": off_hd,
-        }
+        out: dict[str, torch.Tensor] = {}
+        for key, htype in self._head_meta:
+            hm, off = self.sub_heads[key](x)
+            out[f"heatmap_{key}"] = hm
+            out[f"offset_{key}"] = off
+        return out

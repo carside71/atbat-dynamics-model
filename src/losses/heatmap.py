@@ -3,6 +3,7 @@
 import torch
 
 from config import ModelConfig, TrainConfig
+from models.components.heatmap_utils import make_heatmap_key
 
 
 def generate_gt_heatmap_2d(
@@ -217,28 +218,18 @@ def heatmap_offset_loss(
     return diff.sum() / num_valid
 
 
-def compute_heatmap_loss(
+def _compute_heatmap_loss_legacy(
     outputs: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
     model_cfg: ModelConfig,
     train_cfg: TrainConfig,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """ヒートマップヘッド全体の損失を計算する.
+    """レガシーモード: ハードコードされたヒートマップヘッド構成での損失計算.
 
     target_reg のデフォルト順: ["launch_speed", "launch_angle", "hit_distance_sc", "spray_angle"]
     - 2D ヘッド: launch_angle (idx=1), spray_angle (idx=3)
     - 1D launch_speed: idx=0
     - 1D hit_distance: idx=2
-
-    Args:
-        outputs: HeatmapHead の出力 dict
-        batch: データバッチ（reg_targets, reg_mask を含む）
-        model_cfg: モデル設定
-        train_cfg: 学習設定
-
-    Returns:
-        total_loss: 合計損失
-        loss_details: 損失内訳の dict
     """
     reg_targets = batch["reg_targets"]  # (B, D)
     reg_mask = batch["reg_mask"]        # (B, D)
@@ -299,3 +290,93 @@ def compute_heatmap_loss(
     total_loss = total_loss + loss_hm_hd + w_offset * loss_off_hd
 
     return total_loss, details
+
+
+def _compute_heatmap_loss_configurable(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    model_cfg: ModelConfig,
+    train_cfg: TrainConfig,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """設定モード: heatmap_heads に基づく動的な損失計算."""
+    reg_targets = batch["reg_targets"]  # (B, D)
+    reg_mask = batch["reg_mask"]        # (B, D)
+    device = reg_targets.device
+
+    head_configs = model_cfg.get_heatmap_head_configs()
+    target_reg = model_cfg.heatmap_target_reg
+    target_index = {name: i for i, name in enumerate(target_reg)}
+
+    sigma = model_cfg.heatmap_sigma
+    alpha = train_cfg.heatmap_focal_alpha
+    beta = train_cfg.heatmap_focal_beta
+    w_offset = train_cfg.heatmap_loss_weight_offset
+
+    total_loss = torch.tensor(0.0, device=device)
+    details: dict[str, float] = {}
+
+    for hc in head_configs:
+        key = make_heatmap_key(hc.type, hc.targets)
+        hm_key = f"heatmap_{key}"
+        off_key = f"offset_{key}"
+
+        if hc.type == "2d":
+            t0, t1 = hc.targets
+            idx0, idx1 = target_index[t0], target_index[t1]
+            range_h = model_cfg.get_heatmap_norm_range(t0)
+            range_w = model_cfg.get_heatmap_norm_range(t1)
+            grid_h = hc.grid_h if hc.grid_h is not None else model_cfg.heatmap_grid_h
+            grid_w = hc.grid_w if hc.grid_w is not None else model_cfg.heatmap_grid_w
+
+            targets_2d = torch.stack([reg_targets[:, idx0], reg_targets[:, idx1]], dim=-1)
+            mask_2d = torch.stack([reg_mask[:, idx0], reg_mask[:, idx1]], dim=-1)
+
+            gt_hm, gt_off, gt_idx, sm = generate_gt_heatmap_2d(
+                targets_2d, mask_2d, grid_h, grid_w,
+                value_range_h=range_h, value_range_w=range_w, sigma=sigma,
+            )
+            loss_hm = heatmap_focal_loss(outputs[hm_key], gt_hm, sm, alpha, beta)
+            loss_off = heatmap_offset_loss(outputs[off_key], gt_off, gt_idx, sm, is_2d=True)
+        else:
+            t = hc.targets[0]
+            idx = target_index[t]
+            vrange = model_cfg.get_heatmap_norm_range(t)
+            num_bins = hc.num_bins if hc.num_bins is not None else model_cfg.heatmap_num_bins
+
+            gt_hm, gt_off, gt_idx, sm = generate_gt_heatmap_1d(
+                reg_targets[:, idx], reg_mask[:, idx], num_bins, vrange, sigma,
+            )
+            loss_hm = heatmap_focal_loss(outputs[hm_key], gt_hm, sm, alpha, beta)
+            loss_off = heatmap_offset_loss(outputs[off_key], gt_off, gt_idx, sm, is_2d=False)
+
+        details[f"hm_{key}"] = loss_hm.item()
+        details[f"off_{key}"] = loss_off.item()
+        total_loss = total_loss + loss_hm + w_offset * loss_off
+
+    return total_loss, details
+
+
+def compute_heatmap_loss(
+    outputs: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    model_cfg: ModelConfig,
+    train_cfg: TrainConfig,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """ヒートマップヘッド全体の損失を計算する.
+
+    heatmap_heads が設定されている場合は設定駆動モード、
+    未設定の場合はレガシーモードで動作する。
+
+    Args:
+        outputs: HeatmapHead の出力 dict
+        batch: データバッチ（reg_targets, reg_mask を含む）
+        model_cfg: モデル設定
+        train_cfg: 学習設定
+
+    Returns:
+        total_loss: 合計損失
+        loss_details: 損失内訳の dict
+    """
+    if model_cfg.get_heatmap_head_configs() is not None:
+        return _compute_heatmap_loss_configurable(outputs, batch, model_cfg, train_cfg)
+    return _compute_heatmap_loss_legacy(outputs, batch, model_cfg, train_cfg)

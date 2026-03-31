@@ -107,7 +107,7 @@ class TransformerPitchSeqEncoder(BasePitchSeqEncoder):
             dropout=cfg.dropout,
             batch_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.pitch_seq_num_layers)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.pitch_seq_num_layers, enable_nested_tensor=False)
         self._output_dim = cfg.pitch_seq_hidden_dim
 
     @property
